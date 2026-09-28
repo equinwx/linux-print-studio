@@ -120,7 +120,7 @@ To adhere to PEP 668 on modern Linux distributions:
 
 ```bash
 # 1. Clone or navigate to the repository directory
-git clone [https://github.com/your-username/linux-print-studio.git](https://github.com/your-username/linux-print-studio.git)
+git clone [https://github.com/equinwx/linux-print-studio.git](https://github.com/equinwx/linux-print-studio.git)
 cd linux-print-studio
 
 # 2. Create and activate a clean virtual environment
