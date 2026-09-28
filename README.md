@@ -120,7 +120,7 @@ To adhere to PEP 668 on modern Linux distributions:
 
 ```bash
 # 1. Clone or navigate to the repository directory
-git clone [https://github.com/equinwx/linux-print-studio.git](https://github.com/equinwx/linux-print-studio.git)
+git clone https://github.com/equinwx/linux-print-studio.git
 cd linux-print-studio
 
 # 2. Create and activate a clean virtual environment
@@ -229,4 +229,4 @@ CONFIG = {
 
 This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
 
-You are free to run, study, modify, and redistribute this software. If you distribute modified versions of this program, you must make the source code available under the same GPLv3 terms. See the [LICENSE] file for the full license text.
+You are free to run, study, modify, and redistribute this software. If you distribute modified versions of this program, you must make the source code available under the same GPLv3 terms. See the [LICENSE](https://github.com/equinwx/linux-print-studio/blob/main/LICENSE) file for the full license text.
