@@ -1,5 +1,5 @@
 ```markdown
-# Linux Native Document & Photo Studio (Prepress Edition)
+# Linux Print Studio (Prepress Edition)
 
 A standalone, privacy-first prepress printing studio engineered natively for Linux. Built to tile, arrange, soft-proof, and print photos, multi-page PDFs, office documents, and plain text files with millimeter precision on local CUPS printers or export to print-ready PDF/ODT documents.
 
@@ -120,8 +120,9 @@ python3 photoprint.py
 To adhere to PEP 668 on modern Linux distributions:
 
 ```bash
-# 1. Navigate to the project directory
-cd /path/to/photoprint-directory
+# 1. Clone or navigate to the repository directory
+git clone [https://github.com/your-username/linux-print-studio.git](https://github.com/your-username/linux-print-studio.git)
+cd linux-print-studio
 
 # 2. Create and activate a clean virtual environment
 python3 -m venv --system-site-packages venv
@@ -149,7 +150,7 @@ Place any PNG image named `app_icon.png` in the same directory as `photoprint.py
 2. **Create the Desktop Shortcut**:
 ```bash
 mkdir -p ~/.local/share/applications
-nano ~/.local/share/applications/photoprint.desktop
+nano ~/.local/share/applications/linux-print-studio.desktop
 
 ```
 
@@ -159,10 +160,10 @@ nano ~/.local/share/applications/photoprint.desktop
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Photo & Document Studio
-Comment=Linux Native Document & Photo Prepress Studio
-Exec=/usr/bin/python3 /absolute/path/to/photoprint.py
-Icon=/absolute/path/to/app_icon.png
+Name=Linux Print Studio
+Comment=Native Prepress Document & Photo Printing Studio
+Exec=/usr/bin/python3 /absolute/path/to/linux-print-studio/photoprint.py
+Icon=/absolute/path/to/linux-print-studio/app_icon.png
 Terminal=false
 Categories=Graphics;Photography;Publishing;
 StartupWMClass=photoprint
@@ -172,7 +173,7 @@ StartupWMClass=photoprint
 
 4. **Apply Permissions**:
 ```bash
-chmod +x ~/.local/share/applications/photoprint.desktop
+chmod +x ~/.local/share/applications/linux-print-studio.desktop
 update-desktop-database ~/.local/share/applications
 
 ```
@@ -229,8 +230,4 @@ CONFIG = {
 
 This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
 
-You are free to run, study, modify, and redistribute this software. If you distribute modified versions of this program, you must make the source code available under the same GPLv3 terms. See the [LICENSE](https://www.google.com/search?q=LICENSE&utm_source=gemini) file for the full license text.
-
-```
-
-```
+You are free to run, study, modify, and redistribute this software. If you distribute modified versions of this program, you must make the source code available under the same GPLv3 terms. See the [LICENSE][https://github.com/equinwx/linux-print-studio/blob/main/LICENSE] file for the full license text.
