@@ -1,5 +1,4 @@
-```markdown
-# Linux Print Studio (Prepress Edition)
+# Linux Print Studio
 
 A standalone, privacy-first prepress printing studio engineered natively for Linux. Built to tile, arrange, soft-proof, and print photos, multi-page PDFs, office documents, and plain text files with millimeter precision on local CUPS printers or export to print-ready PDF/ODT documents.
 
