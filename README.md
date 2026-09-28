@@ -1,5 +1,7 @@
 # Linux Print Studio
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 A standalone, privacy-first prepress printing studio engineered natively for Linux. Built to tile, arrange, soft-proof, and print photos, multi-page PDFs, office documents, and plain text files with millimeter precision on local CUPS printers or export to print-ready PDF/ODT documents.
 
 This utility was created for personal workflow needs and is shared freely with the community under the **GNU General Public License v3.0 (GPLv3)**.
@@ -61,7 +63,7 @@ This utility was created for personal workflow needs and is shared freely with t
 
 Select the commands matching your Linux distribution:
 
-### 1. Debian / Ubuntu / Linux Mint / LMDE
+### 1. Debian / Ubuntu / Linux Mint / LMDE / Other Debian Based Distros
 ```bash
 sudo apt update
 sudo apt install -y python3 python3-pip python3-pyqt6 python3-pil poppler-utils cups-client libreoffice
@@ -110,7 +112,7 @@ pip install pypdfium2
 If you installed dependencies via your distribution's package manager:
 
 ```bash
-python3 photoprint.py
+python3 linux-print-studio.py
 
 ```
 
@@ -119,9 +121,8 @@ python3 photoprint.py
 To adhere to PEP 668 on modern Linux distributions:
 
 ```bash
-# 1. Clone or navigate to the repository directory
+# 1. Clone the repository and navigate into it
 git clone https://github.com/equinwx/linux-print-studio.git
-cd linux-print-studio
 
 # 2. Create and activate a clean virtual environment
 python3 -m venv --system-site-packages venv
@@ -134,7 +135,7 @@ pip install PyQt6 pillow
 pip install pypdfium2 PyMuPDF
 
 # 4. Launch the application
-python3 photoprint.py
+python3 linux-print-studio.py
 
 ```
 
@@ -145,7 +146,7 @@ python3 photoprint.py
 To integrate the application with your desktop menu and taskbar:
 
 1. **Place an Icon**:
-Place any PNG image named `app_icon.png` in the same directory as `photoprint.py`.
+Place any PNG image named `app_icon.png` in the same directory as `linux-print-studio.py`.
 2. **Create the Desktop Shortcut**:
 ```bash
 mkdir -p ~/.local/share/applications
@@ -161,11 +162,11 @@ Version=1.0
 Type=Application
 Name=Linux Print Studio
 Comment=Native Prepress Document & Photo Printing Studio
-Exec=/usr/bin/python3 /absolute/path/to/linux-print-studio/photoprint.py
+Exec=/usr/bin/python3 /absolute/path/to/linux-print-studio/linux-print-studio.py
 Icon=/absolute/path/to/linux-print-studio/app_icon.png
 Terminal=false
 Categories=Graphics;Photography;Publishing;
-StartupWMClass=photoprint
+StartupWMClass=linux-print-studio
 
 ```
 
@@ -201,7 +202,7 @@ update-desktop-database ~/.local/share/applications
 
 ## Offline Configuration (`CONFIG`)
 
-The `CONFIG` dictionary at the top of `photoprint.py` allows adjusting defaults without modifying application logic:
+The `CONFIG` dictionary at the top of `linux-print-studio.py` allows adjusting defaults without modifying application logic:
 
 ```python
 CONFIG = {
@@ -227,6 +228,6 @@ CONFIG = {
 
 ## License
 
-This project is licensed under the **GNU General Public License v3.0 (GPLv3)**.
+This project is licensed under the [GNU General Public License v3.0 (GPLv3)](https://github.com/equinwx/linux-print-studio/blob/main/LICENSE).
 
 You are free to run, study, modify, and redistribute this software. If you distribute modified versions of this program, you must make the source code available under the same GPLv3 terms. See the [LICENSE](https://github.com/equinwx/linux-print-studio/blob/main/LICENSE) file for the full license text.
