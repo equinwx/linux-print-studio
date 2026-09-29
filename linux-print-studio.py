@@ -25,7 +25,7 @@ from PyQt6.QtGui import (QPixmap, QPainter, QColor, QIcon, QKeySequence,
                          QShortcut, QPageSize, QPageLayout, QFont, QImage, QPen,
                          QDrag, QFileSystemModel, QImageReader, QTextDocument)
 from PyQt6.QtCore import (Qt, QRectF, QSize, QSettings, QSizeF, QMimeData, QPoint, 
-                          QDir, QTimer, QRunnable, QThreadPool, pyqtSignal, QObject, QMarginsF)
+                         QDir, QTimer, QRunnable, QThreadPool, pyqtSignal, QObject, QMarginsF)
 from PyQt6.QtPrintSupport import QPrinter, QPrintPreviewDialog, QPrinterInfo
 
 from PIL import Image, ImageEnhance, ImageOps, ImageFilter
@@ -548,6 +548,33 @@ class CanvasView(QGraphicsView):
         else:
             super().wheelEvent(event)
 
+    # Intercept Shift+Arrows so QGraphicsView scrolling doesn't eat them
+    def keyPressEvent(self, event):
+        mods = event.modifiers()
+        if (mods & Qt.KeyboardModifier.ShiftModifier) or (mods & Qt.KeyboardModifier.AltModifier):
+            n_step = CONFIG["CROP_NUDGE_STEP"]
+            m_step = CONFIG["CROP_NUDGE_MICRO_STEP"]
+            step = m_step if (mods & Qt.KeyboardModifier.ControlModifier) else n_step
+            
+            if event.key() == Qt.Key.Key_Left:
+                self.main_window.nudge_crop(-step, 0)
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Right:
+                self.main_window.nudge_crop(step, 0)
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Up:
+                self.main_window.nudge_crop(0, -step)
+                event.accept()
+                return
+            elif event.key() == Qt.Key.Key_Down:
+                self.main_window.nudge_crop(0, step)
+                event.accept()
+                return
+        # Always call super to allow standard view panning if not consumed
+        super().keyPressEvent(event)
+
     def mousePressEvent(self, event):
         pos = event.position().toPoint()
         item = self.itemAt(pos)
@@ -556,18 +583,25 @@ class CanvasView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton and clicking_photo:
             idx = item.data(0)
             
-            # Shift + Left Click activates smooth in-cell crop framing
-            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-                # Look up the actual QGraphicsPixmapItem directly from our dictionary
+            # Shift or Alt + Left Click activates smooth in-cell crop framing
+            mods = event.modifiers()
+            if (mods & Qt.KeyboardModifier.ShiftModifier) or (mods & Qt.KeyboardModifier.AltModifier):
+                
+                # Auto-switch to "Fill" mode if user is trying to crop explicitly
+                if "Fill" not in self.main_window.combo_fit_mode.currentText():
+                    log_event("Auto-switching to 'Fill' mode to allow fine framing.")
+                    self.main_window.combo_fit_mode.setCurrentIndex(0)
+
+                # Robustly find the pixmap item bypassing PyQt wrapper typing quirks
                 pixmap_item = self.main_window.canvas_pixmap_items.get(idx)
-                if not isinstance(pixmap_item, QGraphicsPixmapItem):
+                if not pixmap_item or not hasattr(pixmap_item, 'setPixmap'):
                     for it in self.items(pos):
-                        if isinstance(it, QGraphicsPixmapItem):
+                        if hasattr(it, 'setPixmap') and it.data(0) is not None:
                             pixmap_item = it
                             idx = it.data(0)
                             break
 
-                if not pixmap_item or pixmap_item.pixmap().isNull():
+                if not pixmap_item:
                     event.accept()
                     return
 
@@ -579,7 +613,7 @@ class CanvasView(QGraphicsView):
                 self.main_window.update_selection_highlight()
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
 
-                # Preload and scale in-memory source image once for silky 60fps drag preview
+                # Preload in-memory source image once for silky 60fps drag preview
                 try:
                     img_data = self.main_window.selected_images_for_print[self._crop_img_idx]
                     path = img_data['path']
@@ -629,25 +663,19 @@ class CanvasView(QGraphicsView):
 
     def mouseMoveEvent(self, event):
         # High-performance live framing: modifies pixmap in-place without scene clears or thread thrashing
-        if (getattr(self, '_is_crop_nudging', False) and 
-            self._crop_img_idx is not None and 
-            getattr(self, '_crop_source_pil', None) is not None and 
-            isinstance(getattr(self, '_crop_item', None), QGraphicsPixmapItem)):
-            
+        if getattr(self, '_is_crop_nudging', False) and self._crop_item:
             curr_pos = event.position().toPoint()
             delta = curr_pos - self._crop_start_pos
             self._crop_start_pos = curr_pos
             
-            if self._crop_img_idx < len(self.main_window.selected_images_for_print):
+            if self._crop_img_idx is not None and self._crop_img_idx < len(self.main_window.selected_images_for_print):
                 img_data = self.main_window.selected_images_for_print[self._crop_img_idx]
                 curr_cx = img_data.get('crop_x', 0.5)
                 curr_cy = img_data.get('crop_y', 0.5)
                 
-                target_w = self._crop_item.pixmap().width()
-                target_h = self._crop_item.pixmap().height()
-                if target_w <= 0 or target_h <= 0:
-                    target_w = max(10, int(self._crop_item.boundingRect().width()))
-                    target_h = max(10, int(self._crop_item.boundingRect().height()))
+                # Use boundingRect() to safely guarantee we get the real dimensions even if pixmap is pending
+                target_w = max(10, int(self._crop_item.boundingRect().width()))
+                target_h = max(10, int(self._crop_item.boundingRect().height()))
 
                 sensitivity = CONFIG.get("MOUSE_CROP_SENSITIVITY", 0.003)
                 new_cx = max(0.0, min(1.0, curr_cx - delta.x() * sensitivity))
@@ -656,31 +684,51 @@ class CanvasView(QGraphicsView):
                 img_data['crop_x'] = new_cx
                 img_data['crop_y'] = new_cy
                 
-                try:
-                    cropped = ImageOps.fit(self._crop_source_pil, (target_w, target_h),
-                                           centering=(new_cx, new_cy),
-                                           method=Image.Resampling.BILINEAR)
-                    
-                    if img_data.get('gray', False):
-                        cropped = ImageOps.grayscale(cropped).convert("RGBA")
-                    elif img_data.get('sepia', False):
-                        g = ImageOps.grayscale(cropped)
-                        cropped = ImageOps.colorize(g, black="#251304", white="#F3E8D0").convert("RGBA")
+                if getattr(self, '_crop_source_pil', None) is not None:
+                    try:
+                        # Prevent Fatal CPU/Memory Freezes by capping live preview crop math to 800px max
+                        preview_w = target_w
+                        preview_h = target_h
+                        scale_up = 1.0
                         
-                    b = img_data.get('b', 1.0)
-                    c = img_data.get('c', 1.0)
-                    s = img_data.get('s', 1.0)
-                    if b != 1.0: cropped = ImageEnhance.Brightness(cropped).enhance(b)
-                    if c != 1.0: cropped = ImageEnhance.Contrast(cropped).enhance(c)
-                    if s != 1.0 and not img_data.get('gray', False): cropped = ImageEnhance.Color(cropped).enhance(s)
-                    
-                    raw = cropped.tobytes("raw", "RGBA")
-                    qim = QImage(raw, cropped.width, cropped.height, QImage.Format.Format_RGBA8888)
-                    self._crop_item.setPixmap(QPixmap.fromImage(qim))
-                    self.main_window.update_selected_label()
-                except Exception as e:
-                    log_event(f"Live crop update error: {e}")
-                    
+                        if max(preview_w, preview_h) > 800:
+                            scale_up = 800.0 / max(preview_w, preview_h)
+                            preview_w = max(10, int(preview_w * scale_up))
+                            preview_h = max(10, int(preview_h * scale_up))
+
+                        # NEAREST ensures it processes in ~1ms
+                        cropped = ImageOps.fit(self._crop_source_pil, (preview_w, preview_h),
+                                               centering=(new_cx, new_cy),
+                                               method=Image.Resampling.NEAREST)
+                        
+                        if img_data.get('gray', False):
+                            cropped = ImageOps.grayscale(cropped).convert("RGBA")
+                        elif img_data.get('sepia', False):
+                            g = ImageOps.grayscale(cropped)
+                            cropped = ImageOps.colorize(g, black="#251304", white="#F3E8D0").convert("RGBA")
+                            
+                        b = img_data.get('b', 1.0)
+                        c = img_data.get('c', 1.0)
+                        s = img_data.get('s', 1.0)
+                        if b != 1.0: cropped = ImageEnhance.Brightness(cropped).enhance(b)
+                        if c != 1.0: cropped = ImageEnhance.Contrast(cropped).enhance(c)
+                        if s != 1.0 and not img_data.get('gray', False): cropped = ImageEnhance.Color(cropped).enhance(s)
+                        
+                        raw = cropped.tobytes("raw", "RGBA")
+                        qim = QImage(raw, cropped.width, cropped.height, QImage.Format.Format_RGBA8888)
+                        pix = QPixmap.fromImage(qim)
+                        
+                        # Fast upscale keeps the item from physically shrinking on canvas during drag
+                        if scale_up != 1.0:
+                            pix = pix.scaled(target_w, target_h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+
+                        if hasattr(self._crop_item, 'setPixmap'):
+                            self._crop_item.setPixmap(pix)
+                            
+                        self.main_window.update_selected_label()
+                    except Exception as e:
+                        log_event(f"Live crop update error: {e}")
+                        
             event.accept()
             return
 
@@ -702,7 +750,7 @@ class CanvasView(QGraphicsView):
                     drag.setMimeData(mime)
                     
                     pixmap_item = self.main_window.canvas_pixmap_items.get(self.drag_start_idx)
-                    if pixmap_item and not pixmap_item.pixmap().isNull():
+                    if pixmap_item and hasattr(pixmap_item, 'pixmap') and not pixmap_item.pixmap().isNull():
                         pixmap = pixmap_item.pixmap().scaledToWidth(100, Qt.TransformationMode.SmoothTransformation)
                         drag.setPixmap(pixmap)
                         drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
@@ -1053,7 +1101,7 @@ class PhotoPrintApp(QMainWindow):
         self.label_file_info.setWordWrap(True)
         left_layout.addWidget(self.label_file_info)
 
-        tip_label = QLabel("Drag images or docs to Canvas.\nCtrl+Wheel: Zoom | Pan: Middle-click\nShift+Drag: Fine Framing Crop")
+        tip_label = QLabel("Drag images or docs to Canvas.\nCtrl+Wheel: Zoom | Pan: Middle-click\nShift/Alt+Drag: Fine Framing Crop")
         tip_label.setStyleSheet("color: #64748B; font-size: 11px;")
         left_layout.addWidget(tip_label)
         
@@ -1386,7 +1434,7 @@ class PhotoPrintApp(QMainWindow):
         QShortcut(QKeySequence("Delete"), self, self.remove_selected_canvas_image)
         QShortcut(QKeySequence("Backspace"), self, self.remove_selected_canvas_image)
         
-        # Fine Framing Nudge Shortcuts (Shift + Arrows)
+        # Note: Shift/Alt + Arrow nudging is primarily handled in CanvasView.keyPressEvent now to prevent widget focus interception
         n_step = CONFIG["CROP_NUDGE_STEP"]
         m_step = CONFIG["CROP_NUDGE_MICRO_STEP"]
         QShortcut(QKeySequence("Shift+Left"), self, lambda: self.nudge_crop(-n_step, 0))
@@ -1397,6 +1445,14 @@ class PhotoPrintApp(QMainWindow):
         QShortcut(QKeySequence("Ctrl+Shift+Right"), self, lambda: self.nudge_crop(m_step, 0))
         QShortcut(QKeySequence("Ctrl+Shift+Up"), self, lambda: self.nudge_crop(0, -m_step))
         QShortcut(QKeySequence("Ctrl+Shift+Down"), self, lambda: self.nudge_crop(0, m_step))
+        QShortcut(QKeySequence("Alt+Left"), self, lambda: self.nudge_crop(-n_step, 0))
+        QShortcut(QKeySequence("Alt+Right"), self, lambda: self.nudge_crop(n_step, 0))
+        QShortcut(QKeySequence("Alt+Up"), self, lambda: self.nudge_crop(0, -n_step))
+        QShortcut(QKeySequence("Alt+Down"), self, lambda: self.nudge_crop(0, n_step))
+        QShortcut(QKeySequence("Ctrl+Alt+Left"), self, lambda: self.nudge_crop(-m_step, 0))
+        QShortcut(QKeySequence("Ctrl+Alt+Right"), self, lambda: self.nudge_crop(m_step, 0))
+        QShortcut(QKeySequence("Ctrl+Alt+Up"), self, lambda: self.nudge_crop(0, -m_step))
+        QShortcut(QKeySequence("Ctrl+Alt+Down"), self, lambda: self.nudge_crop(0, m_step))
 
     def closeEvent(self, event):
         self.render_thread_pool.clear()
@@ -1706,9 +1762,16 @@ class PhotoPrintApp(QMainWindow):
             self.update_canvas(reset_zoom=False)
             self.update_selected_label()
 
-    # --- IN-CELL CROP NUDGING (KEYBOARD) ---
+    # --- IN-CELL CROP NUDGING (KEYBOARD & MOUSE) ---
     def nudge_crop(self, dx, dy):
         if self.active_canvas_index is not None and self.active_canvas_index < len(self.selected_images_for_print):
+            
+            # Auto-switch to "Fill" mode if user is explicitely nudging the crop
+            fit_mode = self.combo_fit_mode.currentText()
+            if "Fill" not in fit_mode:
+                log_event("Auto-switching to 'Fill' mode for fine framing.")
+                self.combo_fit_mode.setCurrentIndex(0)
+                
             data = self.selected_images_for_print[self.active_canvas_index]
             data['crop_x'] = max(0.0, min(1.0, data.get('crop_x', 0.5) + dx))
             data['crop_y'] = max(0.0, min(1.0, data.get('crop_y', 0.5) + dy))
@@ -2181,6 +2244,12 @@ class PhotoPrintApp(QMainWindow):
         if not sync:
             self.render_thread_pool.clear()
             
+        # FIX: Backup old pixmaps to prevent flickering/blinking before clearing the scene
+        old_pixmaps = {}
+        for idx, item in self.canvas_pixmap_items.items():
+            if item.pixmap() and not item.pixmap().isNull():
+                old_pixmaps[idx] = item.pixmap()
+
         self.scene.clear()
         self.ruler_items.clear()
         self.cell_border_items.clear()
@@ -2215,8 +2284,9 @@ class PhotoPrintApp(QMainWindow):
         printable_width = px_width - (margin_px * 2)
         printable_height = px_height - (margin_px * 2)
         
-        photo_w_px = int(def_w_mm * self.PPM)
-        photo_h_px = int(def_h_mm * self.PPM)
+        # Clamp cell size to printable area to prevent off-canvas bleeds (absolute rule)
+        photo_w_px = min(int(def_w_mm * self.PPM), max(1, printable_width))
+        photo_h_px = min(int(def_h_mm * self.PPM), max(1, printable_height))
         
         cols = 1
         while (cols * photo_w_px) + ((cols - 1) * spacing_px) <= printable_width: cols += 1
@@ -2306,13 +2376,14 @@ class PhotoPrintApp(QMainWindow):
             if row_idx >= max_rows: 
                 break 
 
+            # cx, cy represent the top-left corner of the physical dashed cell slot
             cx = offset_x + col_idx * (photo_w_px + spacing_px)
             cy = offset_y + row_idx * (photo_h_px + spacing_px)
             
             w_code = img_data.get('w_code')
             if w_code is None:
-                img_w_px = int(img_data.get('w_mm', def_w_mm) * self.PPM)
-                img_h_px = int(img_data.get('h_mm', def_h_mm) * self.PPM)
+                raw_w = int(img_data.get('w_mm', def_w_mm) * self.PPM)
+                raw_h = int(img_data.get('h_mm', def_h_mm) * self.PPM)
             else:
                 h_code = img_data.get('h_code')
                 landscape = img_data.get('landscape', False)
@@ -2323,8 +2394,21 @@ class PhotoPrintApp(QMainWindow):
                 if landscape:
                     w_val, h_val = h_val, w_val
                     
-                img_w_px = min(int(w_val * self.PPM), photo_w_px if cols > 1 else printable_width)
-                img_h_px = min(int(h_val * self.PPM), photo_h_px if max_rows > 1 else printable_height)
+                raw_w = int(w_val * self.PPM)
+                raw_h = int(h_val * self.PPM)
+
+            # ==========================================================
+            # 🛡️ ABSOLUTE CELL & CANVAS BOUNDARY ENFORCEMENT
+            # ==========================================================
+            # Rule 1: Force hard limits. Image dimensions MUST NEVER exceed the dashed cell (photo_w_px, photo_h_px). 
+            # Since photo_w_px is already clamped to printable_width, this guarantees it never leaves the canvas either.
+            img_w_px = min(raw_w, photo_w_px)
+            img_h_px = min(raw_h, photo_h_px)
+            
+            # Rule 2: If the image is smaller than the cell slot, center it perfectly inside the dashed border
+            draw_x = cx + (photo_w_px - img_w_px) // 2
+            draw_y = cy + (photo_h_px - img_h_px) // 2
+            # ==========================================================
 
             path = img_data['path']
             try:
@@ -2371,9 +2455,16 @@ class PhotoPrintApp(QMainWindow):
                     pixmap = self.pixmap_cache[cache_key]
                     item = self.scene.addPixmap(pixmap)
                 else:
-                    placeholder = QPixmap(img_w_px, img_h_px)
-                    placeholder.fill(QColor(0, 0, 0, 0))
-                    item = self.scene.addPixmap(placeholder)
+                    # FIX: Use previous stale pixmap to prevent UI blink, scale it if layout changed
+                    if global_idx in old_pixmaps:
+                        old_pix = old_pixmaps[global_idx]
+                        if old_pix.width() != img_w_px or old_pix.height() != img_h_px:
+                            old_pix = old_pix.scaled(img_w_px, img_h_px, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+                        item = self.scene.addPixmap(old_pix)
+                    else:
+                        placeholder = QPixmap(img_w_px, img_h_px)
+                        placeholder.fill(QColor(0, 0, 0, 0))
+                        item = self.scene.addPixmap(placeholder)
                     
                     worker = ImageRenderWorker(
                         current_gen, global_idx, img_data, img_w_px, img_h_px,
@@ -2386,12 +2477,12 @@ class PhotoPrintApp(QMainWindow):
                     worker.signals.failed.connect(self.on_async_render_failed)
                     self.render_thread_pool.start(worker)
 
-            item.setPos(cx, cy)
+            item.setPos(draw_x, draw_y)
             item.setData(0, global_idx)
             self.canvas_pixmap_items[global_idx] = item
             
             if getattr(self, 'active_canvas_index', None) == global_idx:
-                self.highlight_item = QGraphicsRectItem(cx, cy, img_w_px, img_h_px)
+                self.highlight_item = QGraphicsRectItem(draw_x, draw_y, img_w_px, img_h_px)
                 highlight_color = QColor(56, 189, 248) if self.is_dark_mode else QColor(37, 99, 235)
                 pen = QPen(highlight_color, 4)
                 pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
@@ -2614,4 +2705,5 @@ if __name__ == '__main__':
     if not app.windowIcon().isNull():
         window.setWindowIcon(app.windowIcon())
         
+
     sys.exit(app.exec())
