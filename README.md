@@ -18,7 +18,7 @@ This utility was created for personal workflow needs and is shared freely with t
 
 ### 📸 Tab 1: Photos & Tiling Tools
 * **Standard Lab Presets**: Instant sizing for Passport (Standard 35×45mm, US 51×51mm, India 35×35mm), ID cards, Stamp photos, Wallet prints, and custom dimensions (10–500 mm).
-* **In-Cell Fine Framing**: Pan and crop inside any cell with `Alt` + Mouse Drag or nudge using `Alt` + Arrow keys (`Shift` for 1% micro-nudging).
+* **In-Cell Fine Framing**: Pan and crop inside any cell with `Shift` + Mouse Drag or nudge using `Shift` + Arrow keys (`Ctrl` for 1% micro-nudging).
 * **Guillotine Cutting Guides**: Configurable printable dashed cutting borders and corner crop marks for clean manual trimming.
 * **Substrate Sharpening**: Multi-tier unsharp masking calibrated for Matte, Rag, Standard Photo, or Glossy papers.
 * **Color Management**: LittleCMS proofing engine with custom `.icc`/`.icm` profile loading, soft-proofing simulation, and rendering intent selection (Perceptual, Relative Colorimetric, Saturation, Absolute).
@@ -191,9 +191,9 @@ update-desktop-database ~/.local/share/applications
 | `Ctrl` + `C` | Copy selected cell to clipboard |
 | `Ctrl` + `V` | Paste cell from clipboard |
 | `Delete` / `Backspace` | Remove selected photo or document page |
-| `Alt` + Mouse Drag | Fine-tune in-cell framing crop |
-| `Alt` + Arrow Keys | Nudge framing crop by 4% increments |
-| `Alt` + `Shift` + Arrow Keys | Micro-nudge framing crop by 1% increments |
+| `Shift` + Mouse Drag | Fine-tune in-cell framing crop |
+| `Shift` + Arrow Keys | Nudge framing crop by 4% increments |
+| `Shift` + `Ctrl` + Arrow Keys | Micro-nudge framing crop by 1% increments |
 | `Ctrl` + Mouse Wheel | Zoom canvas workspace |
 | Middle Mouse Drag | Pan canvas workspace |
 | `Esc` | Quit application |
