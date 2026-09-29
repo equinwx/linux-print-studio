@@ -89,9 +89,9 @@ CONFIG = {
     "THUMBNAIL_SIZE": 76,             # Size of photo thumbnails in the left gallery (pixels)
 
     # --- 7. In-Cell Crop & Framing Sensitivity ---
-    "MOUSE_CROP_SENSITIVITY": 0.004,  # Panning speed when holding Alt + Dragging inside a photo
-    "CROP_NUDGE_STEP": 0.04,          # Repositioning step when pressing Alt + Arrow keys (4%)
-    "CROP_NUDGE_MICRO_STEP": 0.01,    # Precision step when pressing Alt + Shift + Arrow keys (1%)
+    "MOUSE_CROP_SENSITIVITY": 0.003,  # Panning speed when holding Shift + Dragging inside a photo
+    "CROP_NUDGE_STEP": 0.04,          # Repositioning step when pressing Shift + Arrow keys (4%)
+    "CROP_NUDGE_MICRO_STEP": 0.01,    # Precision step when pressing Ctrl + Shift + Arrow keys (1%)
 }
 # ==============================================================================
 
@@ -525,6 +525,8 @@ class CanvasView(QGraphicsView):
         self._is_panning = False
         self._is_crop_nudging = False
         self._crop_img_idx = None
+        self._crop_source_pil = None
+        self._crop_item = None
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -552,19 +554,62 @@ class CanvasView(QGraphicsView):
         clicking_photo = item and item.data(0) is not None
 
         if event.button() == Qt.MouseButton.LeftButton and clicking_photo:
-            if event.modifiers() == Qt.KeyboardModifier.AltModifier:
+            idx = item.data(0)
+            
+            # Shift + Left Click activates smooth in-cell crop framing
+            if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+                # Look up the actual QGraphicsPixmapItem directly from our dictionary
+                pixmap_item = self.main_window.canvas_pixmap_items.get(idx)
+                if not isinstance(pixmap_item, QGraphicsPixmapItem):
+                    for it in self.items(pos):
+                        if isinstance(it, QGraphicsPixmapItem):
+                            pixmap_item = it
+                            idx = it.data(0)
+                            break
+
+                if not pixmap_item or pixmap_item.pixmap().isNull():
+                    event.accept()
+                    return
+
                 self._is_crop_nudging = True
-                self._crop_start_pos = event.pos()
-                self._crop_img_idx = item.data(0)
-                self.main_window.active_canvas_index = item.data(0)
+                self._crop_start_pos = pos
+                self._crop_img_idx = idx
+                self._crop_item = pixmap_item
+                self.main_window.active_canvas_index = idx
                 self.main_window.update_selection_highlight()
                 self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+                # Preload and scale in-memory source image once for silky 60fps drag preview
+                try:
+                    img_data = self.main_window.selected_images_for_print[self._crop_img_idx]
+                    path = img_data['path']
+                    if is_doc_file(path):
+                        page_num = img_data.get('page', 0)
+                        src_pil = render_document_page(path, page_num=page_num, dpi=150)
+                    else:
+                        with Image.open(path) as src:
+                            src_pil = src.convert("RGBA")
+
+                    # Performance cap: Downsample oversized source files to 1600px max for live drag preview
+                    max_dim = max(src_pil.width, src_pil.height)
+                    if max_dim > 1600:
+                        scale = 1600.0 / max_dim
+                        new_size = (max(10, int(src_pil.width * scale)), max(10, int(src_pil.height * scale)))
+                        src_pil = src_pil.resize(new_size, Image.Resampling.BILINEAR)
+
+                    self._crop_source_pil = src_pil
+                except Exception as e:
+                    log_event(f"Error preparing crop preview: {e}")
+                    self._crop_source_pil = None
+                    self._crop_item = None
+                    self._is_crop_nudging = False
+
                 event.accept()
                 return
 
             self.drag_start_pos = pos
-            self.drag_start_idx = item.data(0)
-            self.main_window.active_canvas_index = item.data(0)
+            self.drag_start_idx = idx
+            self.main_window.active_canvas_index = idx
             self.main_window.update_selection_highlight()
             
         elif event.button() == Qt.MouseButton.MiddleButton or (event.button() == Qt.MouseButton.LeftButton and not clicking_photo):
@@ -583,17 +628,59 @@ class CanvasView(QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if getattr(self, '_is_crop_nudging', False) and self._crop_img_idx is not None:
-            delta = event.pos() - self._crop_start_pos
-            self._crop_start_pos = event.pos()
+        # High-performance live framing: modifies pixmap in-place without scene clears or thread thrashing
+        if (getattr(self, '_is_crop_nudging', False) and 
+            self._crop_img_idx is not None and 
+            getattr(self, '_crop_source_pil', None) is not None and 
+            isinstance(getattr(self, '_crop_item', None), QGraphicsPixmapItem)):
+            
+            curr_pos = event.position().toPoint()
+            delta = curr_pos - self._crop_start_pos
+            self._crop_start_pos = curr_pos
+            
             if self._crop_img_idx < len(self.main_window.selected_images_for_print):
                 img_data = self.main_window.selected_images_for_print[self._crop_img_idx]
                 curr_cx = img_data.get('crop_x', 0.5)
                 curr_cy = img_data.get('crop_y', 0.5)
-                sensitivity = CONFIG["MOUSE_CROP_SENSITIVITY"]
-                img_data['crop_x'] = max(0.0, min(1.0, curr_cx - delta.x() * sensitivity))
-                img_data['crop_y'] = max(0.0, min(1.0, curr_cy - delta.y() * sensitivity))
-                self.main_window.update_canvas(reset_zoom=False)
+                
+                target_w = self._crop_item.pixmap().width()
+                target_h = self._crop_item.pixmap().height()
+                if target_w <= 0 or target_h <= 0:
+                    target_w = max(10, int(self._crop_item.boundingRect().width()))
+                    target_h = max(10, int(self._crop_item.boundingRect().height()))
+
+                sensitivity = CONFIG.get("MOUSE_CROP_SENSITIVITY", 0.003)
+                new_cx = max(0.0, min(1.0, curr_cx - delta.x() * sensitivity))
+                new_cy = max(0.0, min(1.0, curr_cy - delta.y() * sensitivity))
+                
+                img_data['crop_x'] = new_cx
+                img_data['crop_y'] = new_cy
+                
+                try:
+                    cropped = ImageOps.fit(self._crop_source_pil, (target_w, target_h),
+                                           centering=(new_cx, new_cy),
+                                           method=Image.Resampling.BILINEAR)
+                    
+                    if img_data.get('gray', False):
+                        cropped = ImageOps.grayscale(cropped).convert("RGBA")
+                    elif img_data.get('sepia', False):
+                        g = ImageOps.grayscale(cropped)
+                        cropped = ImageOps.colorize(g, black="#251304", white="#F3E8D0").convert("RGBA")
+                        
+                    b = img_data.get('b', 1.0)
+                    c = img_data.get('c', 1.0)
+                    s = img_data.get('s', 1.0)
+                    if b != 1.0: cropped = ImageEnhance.Brightness(cropped).enhance(b)
+                    if c != 1.0: cropped = ImageEnhance.Contrast(cropped).enhance(c)
+                    if s != 1.0 and not img_data.get('gray', False): cropped = ImageEnhance.Color(cropped).enhance(s)
+                    
+                    raw = cropped.tobytes("raw", "RGBA")
+                    qim = QImage(raw, cropped.width, cropped.height, QImage.Format.Format_RGBA8888)
+                    self._crop_item.setPixmap(QPixmap.fromImage(qim))
+                    self.main_window.update_selected_label()
+                except Exception as e:
+                    log_event(f"Live crop update error: {e}")
+                    
             event.accept()
             return
 
@@ -614,9 +701,9 @@ class CanvasView(QGraphicsView):
                     mime.setText(f"swap:{self.drag_start_idx}")
                     drag.setMimeData(mime)
                     
-                    item = self.itemAt(self.drag_start_pos)
-                    if isinstance(item, QGraphicsPixmapItem):
-                        pixmap = item.pixmap().scaledToWidth(100, Qt.TransformationMode.SmoothTransformation)
+                    pixmap_item = self.main_window.canvas_pixmap_items.get(self.drag_start_idx)
+                    if pixmap_item and not pixmap_item.pixmap().isNull():
+                        pixmap = pixmap_item.pixmap().scaledToWidth(100, Qt.TransformationMode.SmoothTransformation)
                         drag.setPixmap(pixmap)
                         drag.setHotSpot(QPoint(pixmap.width() // 2, pixmap.height() // 2))
 
@@ -628,10 +715,14 @@ class CanvasView(QGraphicsView):
     def mouseReleaseEvent(self, event):
         if getattr(self, '_is_crop_nudging', False):
             self._is_crop_nudging = False
+            self._crop_source_pil = None
+            self._crop_item = None
             self._crop_img_idx = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
             self.main_window.save_history_state()
             self.main_window.update_selected_label()
+            # Commit full-quality Lanczos / LittleCMS render pass once drag completes
+            self.main_window.update_canvas(reset_zoom=False)
             event.accept()
             return
 
@@ -917,7 +1008,6 @@ class PhotoPrintApp(QMainWindow):
         self.lbl_workspace.setStyleSheet("font-weight: bold; color: #38BDF8;")
         self.lbl_workspace.setToolTip(self.workspace_root)
         
-        # Upwards folder button (navigates parent directories until workspace_root)
         self.btn_up_folder = QPushButton("▲ Up")
         self.btn_up_folder.setToolTip("Go up one folder level")
         self.btn_up_folder.setFixedWidth(56)
@@ -958,13 +1048,12 @@ class PhotoPrintApp(QMainWindow):
         self.gallery.itemSelectionChanged.connect(self.update_selected_label)
         left_layout.addWidget(self.gallery, stretch=3)
         
-        # Effective PPI & Inspector Details
         self.label_file_info = QLabel("Selected: None")
         self.label_file_info.setStyleSheet("font-weight: bold; font-size: 11px;")
         self.label_file_info.setWordWrap(True)
         left_layout.addWidget(self.label_file_info)
 
-        tip_label = QLabel("Drag images or docs to Canvas.\nCtrl+Wheel: Zoom | Pan: Middle-click\nAlt+Drag: Fine Framing Crop")
+        tip_label = QLabel("Drag images or docs to Canvas.\nCtrl+Wheel: Zoom | Pan: Middle-click\nShift+Drag: Fine Framing Crop")
         tip_label.setStyleSheet("color: #64748B; font-size: 11px;")
         left_layout.addWidget(tip_label)
         
@@ -1084,7 +1173,6 @@ class PhotoPrintApp(QMainWindow):
         self.combo_fit_mode.currentIndexChanged.connect(lambda: self.trigger_layout_change(preserve_zoom=True))
         self.layout_photo.addRow("Photo Snapping:", self.combo_fit_mode)
 
-        # Photo Tiling, Slicing & Darkroom Cutting Lines
         self.spin_spacing = QSpinBox()
         self.spin_spacing.setRange(0, 50); self.spin_spacing.setValue(CONFIG["DEFAULT_SPACING_MM"])
         self.spin_spacing.valueChanged.connect(self.schedule_layout_update)
@@ -1152,7 +1240,7 @@ class PhotoPrintApp(QMainWindow):
         self.combo_doc_dpi.addItem("300 DPI (Standard Text)", 300)
         self.combo_doc_dpi.addItem("600 DPI (Ultra Sharp Text)", 600)
         self.combo_doc_dpi.addItem("1200 DPI (Laser / Studio Text)", 1200)
-        self.combo_doc_dpi.setCurrentIndex(1)  # 600 DPI default
+        self.combo_doc_dpi.setCurrentIndex(1)
         self.combo_doc_dpi.currentIndexChanged.connect(lambda: self.trigger_layout_change(preserve_zoom=True))
         layout_doc.addRow("Text Render DPI:", self.combo_doc_dpi)
 
@@ -1298,17 +1386,17 @@ class PhotoPrintApp(QMainWindow):
         QShortcut(QKeySequence("Delete"), self, self.remove_selected_canvas_image)
         QShortcut(QKeySequence("Backspace"), self, self.remove_selected_canvas_image)
         
-        # Fine Framing Nudge Shortcuts (Alt + Arrows)
+        # Fine Framing Nudge Shortcuts (Shift + Arrows)
         n_step = CONFIG["CROP_NUDGE_STEP"]
         m_step = CONFIG["CROP_NUDGE_MICRO_STEP"]
-        QShortcut(QKeySequence("Alt+Left"), self, lambda: self.nudge_crop(-n_step, 0))
-        QShortcut(QKeySequence("Alt+Right"), self, lambda: self.nudge_crop(n_step, 0))
-        QShortcut(QKeySequence("Alt+Up"), self, lambda: self.nudge_crop(0, -n_step))
-        QShortcut(QKeySequence("Alt+Down"), self, lambda: self.nudge_crop(0, n_step))
-        QShortcut(QKeySequence("Alt+Shift+Left"), self, lambda: self.nudge_crop(-m_step, 0))
-        QShortcut(QKeySequence("Alt+Shift+Right"), self, lambda: self.nudge_crop(m_step, 0))
-        QShortcut(QKeySequence("Alt+Shift+Up"), self, lambda: self.nudge_crop(0, -m_step))
-        QShortcut(QKeySequence("Alt+Shift+Down"), self, lambda: self.nudge_crop(0, m_step))
+        QShortcut(QKeySequence("Shift+Left"), self, lambda: self.nudge_crop(-n_step, 0))
+        QShortcut(QKeySequence("Shift+Right"), self, lambda: self.nudge_crop(n_step, 0))
+        QShortcut(QKeySequence("Shift+Up"), self, lambda: self.nudge_crop(0, -n_step))
+        QShortcut(QKeySequence("Shift+Down"), self, lambda: self.nudge_crop(0, n_step))
+        QShortcut(QKeySequence("Ctrl+Shift+Left"), self, lambda: self.nudge_crop(-m_step, 0))
+        QShortcut(QKeySequence("Ctrl+Shift+Right"), self, lambda: self.nudge_crop(m_step, 0))
+        QShortcut(QKeySequence("Ctrl+Shift+Up"), self, lambda: self.nudge_crop(0, -m_step))
+        QShortcut(QKeySequence("Ctrl+Shift+Down"), self, lambda: self.nudge_crop(0, m_step))
 
     def closeEvent(self, event):
         self.render_thread_pool.clear()
@@ -1391,7 +1479,6 @@ class PhotoPrintApp(QMainWindow):
         self.current_folder = os.path.abspath(folder_path)
         root = os.path.abspath(self.workspace_root)
         
-        # Enable Up button only if inside a subfolder under workspace_root
         can_go_up = (self.current_folder != root and self.current_folder.startswith(root))
         if hasattr(self, 'btn_up_folder'):
             self.btn_up_folder.setEnabled(can_go_up)
@@ -1399,7 +1486,6 @@ class PhotoPrintApp(QMainWindow):
         self.folder_generation += 1
         current_gen = self.folder_generation
         
-        # Discard previous folder thumbnail decodes immediately
         self.thumb_thread_pool.clear()
         
         self.gallery.clear()
@@ -1423,7 +1509,6 @@ class PhotoPrintApp(QMainWindow):
         valid_entries.sort(key=lambda x: x[0].lower())
         thumb_size = CONFIG["THUMBNAIL_SIZE"]
         
-        # Batch populate gallery on the UI thread with zero lag
         self.gallery.setUpdatesEnabled(False)
         for name, full_path, lower in valid_entries:
             if full_path in self.thumbnail_cache:
@@ -1446,7 +1531,6 @@ class PhotoPrintApp(QMainWindow):
             self.gallery_items_by_path[full_path] = item
         self.gallery.setUpdatesEnabled(True)
 
-        # Offload thumbnail decodes to the dedicated thumbnail thread pool
         for name, full_path, lower in valid_entries:
             if full_path not in self.thumbnail_cache:
                 worker = ThumbnailWorker(current_gen, full_path, thumb_size, self)
@@ -1622,7 +1706,7 @@ class PhotoPrintApp(QMainWindow):
             self.update_canvas(reset_zoom=False)
             self.update_selected_label()
 
-    # --- IN-CELL CROP NUDGING ---
+    # --- IN-CELL CROP NUDGING (KEYBOARD) ---
     def nudge_crop(self, dx, dy):
         if self.active_canvas_index is not None and self.active_canvas_index < len(self.selected_images_for_print):
             data = self.selected_images_for_print[self.active_canvas_index]
@@ -1997,6 +2081,8 @@ class PhotoPrintApp(QMainWindow):
                 self.highlight_item.setBrush(QColor(0, 0, 0, 0))
                 self.highlight_item.setData(0, self.active_canvas_index)
                 self.highlight_item.setZValue(1000)
+                # Ensure mouse events pass directly through the outline to the underlying photo
+                self.highlight_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 self.scene.addItem(self.highlight_item)
                 break
         self.update_selected_label()
@@ -2202,7 +2288,6 @@ class PhotoPrintApp(QMainWindow):
         active_icc_path = self.custom_icc_path if icc_selection.startswith("Custom:") else ""
         is_matte_simulation = ("Matte" in icc_selection)
 
-        # Document Settings Readout
         doc_render_dpi = int(self.combo_doc_dpi.currentData()) if hasattr(self, 'combo_doc_dpi') else 600
         doc_color_mode = self.combo_doc_color.currentText() if hasattr(self, 'combo_doc_color') else "Normal (Original)"
         txt_font = self.combo_txt_font.currentText() if hasattr(self, 'combo_txt_font') else "Monospace"
@@ -2314,6 +2399,8 @@ class PhotoPrintApp(QMainWindow):
                 self.highlight_item.setBrush(QColor(0, 0, 0, 0))
                 self.highlight_item.setData(0, global_idx) 
                 self.highlight_item.setZValue(1000)
+                # Mouse transparent overlay: clicks fall straight through to the photo item
+                self.highlight_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
                 self.scene.addItem(self.highlight_item)
             
             col_idx += 1
@@ -2513,7 +2600,7 @@ class PhotoPrintApp(QMainWindow):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    app.setDesktopFileName("photoprint")
+    app.setDesktopFileName("linux-print-studio")
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
     for icon_name in ("app_icon.png", "icon.png", "logo.png"):
