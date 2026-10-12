@@ -607,7 +607,9 @@ class CanvasView(QGraphicsView):
                 if act_change_page and action == act_change_page:
                     chosen, ok = QInputDialog.getItem(self, "Select Document Page", "Display Page:", [f"Page {i+1}" for i in range(total_p)], curr_p, False)
                     if ok and chosen: data['page'] = int(chosen.split()[1]) - 1; state_changed = True
-                elif action == act_fit_full: data['w_code'] = -1; data['h_code'] = -1; self.main_window.combo_photo.setCurrentIndex(0); state_changed = True
+                elif action == act_fit_full:
+                    self.main_window.combo_photo.setCurrentText("1 Image / Page (Full Sheet)")
+                    state_changed = False
                 elif action == act_rotate: data['landscape'] = not data.get('landscape', False); state_changed = True
                 elif action == act_toggle_hc: data['high_contrast'] = not data.get('high_contrast', False); state_changed = True
                 elif action == act_reset_crop: 
@@ -618,7 +620,7 @@ class CanvasView(QGraphicsView):
             else:
                 size_menu = menu.addMenu("📐 Change Photo Size")
                 for name, w, h in self.main_window.photo_presets:
-                    if name != "Custom Size": size_menu.addAction(name).setData((w, h))
+                    if name != "Custom Size": size_menu.addAction(name)
                 act_custom_size = size_menu.addAction("Set Custom Size (mm)...")
                 menu.addSeparator(); act_reset_crop = menu.addAction("🎯 Reset Framing & Zoom"); menu.addSeparator()
                 act_bright = menu.addAction("Brighten (+10%)"); act_dark = menu.addAction("Darken (-10%)")
@@ -635,8 +637,14 @@ class CanvasView(QGraphicsView):
                         new_w, ok1 = QInputDialog.getInt(self, "Custom Width", "Width in mm (10-500):", int(curr_w), 10, 500)
                         if ok1:
                             new_h, ok2 = QInputDialog.getInt(self, "Custom Height", "Height in mm (10-500):", int(curr_h), 10, 500)
-                            if ok2: data['w_code'] = new_w; data['h_code'] = new_h; data['landscape'] = False; state_changed = True
-                    else: w, h = action.data(); data['w_code'] = w; data['h_code'] = h; data['landscape'] = self.main_window.check_photo_landscape.isChecked(); state_changed = True
+                            if ok2: 
+                                self.main_window.spin_custom_w.setValue(new_w)
+                                self.main_window.spin_custom_h.setValue(new_h)
+                                self.main_window.combo_photo.setCurrentText("Custom Size")
+                                state_changed = False
+                    else: 
+                        self.main_window.combo_photo.setCurrentText(action.text())
+                        state_changed = False
                 elif action == act_reset_crop: 
                     data['crop_x'] = 0.5; data['crop_y'] = 0.5; data['zoom'] = 1.0
                     if 'fit_mode' in data: del data['fit_mode']
@@ -1121,7 +1129,7 @@ class PhotoPrintApp(QMainWindow):
         f_size = CONFIG["UI_FONT_SIZE"]
         if self.is_dark_mode:
             stylesheet = f"""
-                QWidget {{ background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: {f_size}px; }}
+                QWidget {{ background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, sans-serif; font-size: {f_size}px; }}
                 QLabel {{ color: #F8FAFC; font-weight: 600; font-size: {f_size}px; }}
                 QCheckBox {{ color: #F1F5F9; font-weight: 500; font-size: {f_size}px; spacing: 8px; }}
                 QCheckBox::indicator {{ width: 17px; height: 17px; border-radius: 4px; border: 1.5px solid #475569; background-color: #1E293B; }}
@@ -1164,12 +1172,16 @@ class PhotoPrintApp(QMainWindow):
                 QGraphicsView {{ border: none; }}
                 QScrollArea {{ border: none; background-color: transparent; }}
                 QWidget#scrollBg {{ background-color: transparent; }}
+                QMenu {{ background-color: #1E293B; color: #F8FAFC; border: 1px solid #334155; border-radius: 6px; padding: 4px 0px; }}
+                QMenu::item {{ padding: 6px 24px 6px 12px; background-color: transparent; }}
+                QMenu::item:selected {{ background-color: #2563EB; color: #FFFFFF; }}
+                QMenu::separator {{ height: 1px; background-color: #334155; margin: 4px 0px; }}
             """
             self.scene.setBackgroundBrush(QColor("#020617"))
             self.pagination_bar.setStyleSheet("background-color: #1E293B; border-radius: 6px; border: 1px solid #334155;")
         else:
             stylesheet = f"""
-                QWidget {{ background-color: #F8FAFC; color: #0F172A; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: {f_size}px; }}
+                QWidget {{ background-color: #F8FAFC; color: #0F172A; font-family: system-ui, -apple-system, sans-serif; font-size: {f_size}px; }}
                 QLabel {{ color: #0F172A; font-weight: 600; font-size: {f_size}px; }}
                 QCheckBox {{ color: #0F172A; font-weight: 500; font-size: {f_size}px; spacing: 8px; }}
                 QCheckBox::indicator {{ width: 17px; height: 17px; border-radius: 4px; border: 1.5px solid #CBD5E1; background-color: #FFFFFF; }}
@@ -1212,6 +1224,10 @@ class PhotoPrintApp(QMainWindow):
                 QGraphicsView {{ border: none; }}
                 QScrollArea {{ border: none; background-color: transparent; }}
                 QWidget#scrollBg {{ background-color: transparent; }}
+                QMenu {{ background-color: #FFFFFF; color: #0F172A; border: 1px solid #CBD5E1; border-radius: 6px; padding: 4px 0px; }}
+                QMenu::item {{ padding: 6px 24px 6px 12px; background-color: transparent; }}
+                QMenu::item:selected {{ background-color: #DBEAFE; color: #1E3A8A; }}
+                QMenu::separator {{ height: 1px; background-color: #E2E8F0; margin: 4px 0px; }}
             """
             self.scene.setBackgroundBrush(QColor("#E2E8F0"))
             self.pagination_bar.setStyleSheet("background-color: #FFFFFF; border-radius: 6px; border: 1px solid #CBD5E1;")
@@ -1383,16 +1399,8 @@ class PhotoPrintApp(QMainWindow):
         self.draw_rulers(px_width, px_height, paper_w_mm, paper_h_mm, int(10 * self.PPM))
 
         dash_pen = QPen(QColor(100, 116, 139) if self.is_dark_mode else QColor(148, 163, 184), 2, Qt.PenStyle.DashLine)
-        for r in range(max_rows):
-            for c in range(cols):
-                cx = offset_x + c * (photo_w_px + spacing_px)
-                cy = offset_y + r * (photo_h_px + spacing_px)
-                cell = QGraphicsRectItem(cx, cy, photo_w_px, photo_h_px)
-                cell.setPen(dash_pen); cell.setBrush(QColor(0, 0, 0, 0)); self.scene.addItem(cell)
-                self.cell_border_items.append(cell)
-                if not is_borderless: self.draw_corner_crop_marks(cx, cy, photo_w_px, photo_h_px)
         
-        col_idx = 0; row_idx = 0
+        start_idx = page_to_draw * capacity
         global_fit_mode = self.combo_fit_mode.currentText(); sharp_mode = self.combo_sharpen.currentText()
         soft_proof_active = self.check_soft_proof.isChecked(); render_intent_text = self.combo_intent.currentText()
         is_monochrome = (self.combo_color.currentData() == QPrinter.ColorMode.GrayScale)
@@ -1405,90 +1413,104 @@ class PhotoPrintApp(QMainWindow):
         txt_font = self.combo_txt_font.currentText() if hasattr(self, 'combo_txt_font') else "Monospace"
         txt_size = self.spin_txt_size.value() if hasattr(self, 'spin_txt_size') else 10
         
-        start_idx = page_to_draw * capacity
-        end_idx = min(start_idx + capacity, len(self.selected_images_for_print))
-        page_images = self.selected_images_for_print[start_idx:end_idx]
-        
-        for local_slot, img_data in enumerate(page_images):
+        for local_slot in range(capacity):
             global_idx = start_idx + local_slot
-            if col_idx >= cols: col_idx = 0; row_idx += 1
-            if row_idx >= max_rows: break 
-
-            cx = offset_x + col_idx * (photo_w_px + spacing_px)
-            cy = offset_y + row_idx * (photo_h_px + spacing_px)
+            c = local_slot % cols
+            r = local_slot // cols
             
-            w_code = img_data.get('w_code')
-            if w_code is None:
-                raw_w = int(img_data.get('w_mm', def_w_mm) * self.PPM)
-                raw_h = int(img_data.get('h_mm', def_h_mm) * self.PPM)
-            else:
-                h_code = img_data.get('h_code'); landscape = img_data.get('landscape', False)
-                if w_code < 0: w_val, h_val = self.calculate_dynamic_size(w_code)
-                else: w_val, h_val = w_code, h_code
-                if landscape: w_val, h_val = h_val, w_val
-                raw_w = int(w_val * self.PPM); raw_h = int(h_val * self.PPM)
-
-            img_w_px = min(raw_w, photo_w_px)
-            img_h_px = min(raw_h, photo_h_px)
-            draw_x = cx + (photo_w_px - img_w_px) // 2
-            draw_y = cy + (photo_h_px - img_h_px) // 2
-
-            path = img_data['path']
-            try: mtime = os.path.getmtime(path)
-            except OSError: mtime = 0
+            cx = offset_x + c * (photo_w_px + spacing_px)
+            cy = offset_y + r * (photo_h_px + spacing_px)
+            
+            if global_idx < len(self.selected_images_for_print):
+                img_data = self.selected_images_for_print[global_idx]
                 
-            gray = img_data.get('gray', False); sepia = img_data.get('sepia', False)
-            b = round(img_data.get('b', 1.0), 2); c = round(img_data.get('c', 1.0), 2); s = round(img_data.get('s', 1.0), 2)
-            crop_x = round(img_data.get('crop_x', 0.5), 3); crop_y = round(img_data.get('crop_y', 0.5), 3)
-            zoom_scale = img_data.get('zoom', 1.0); page_num = img_data.get('page', 0); high_contrast = img_data.get('high_contrast', False)
-            
-            item_fit_mode = img_data.get('fit_mode', global_fit_mode)
-            
-            cache_key = (
-                path, page_num, mtime, img_w_px, img_h_px, item_fit_mode, gray, sepia, b, c, s, sharp_mode, soft_proof_active, 
-                active_icc_path, render_intent_text, crop_x, crop_y, zoom_scale, is_monochrome, is_matte_simulation, doc_color_mode, high_contrast,
-                doc_render_dpi, txt_font, txt_size
-            )
-
-            if sync:
-                try:
-                    qim = process_image_pipeline(img_data, img_w_px, img_h_px, item_fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
-                        render_intent_text, is_monochrome, is_matte_simulation, render_dpi=self.DPI, doc_color_mode=doc_color_mode, txt_font=txt_font, txt_size=txt_size)
-                    pixmap = QPixmap.fromImage(qim)
-                except Exception: col_idx += 1; continue
-                item = self.scene.addPixmap(pixmap)
-            else:
-                if cache_key in self.pixmap_cache:
-                    self.pixmap_cache.move_to_end(cache_key)
-                    item = self.scene.addPixmap(self.pixmap_cache[cache_key])
+                w_code = img_data.get('w_code')
+                if w_code is None:
+                    raw_w = int(img_data.get('w_mm', def_w_mm) * self.PPM)
+                    raw_h = int(img_data.get('h_mm', def_h_mm) * self.PPM)
                 else:
-                    if global_idx in old_pixmaps:
-                        old_pix = old_pixmaps[global_idx]
-                        if old_pix.width() != img_w_px or old_pix.height() != img_h_px:
-                            old_pix = old_pix.scaled(img_w_px, img_h_px, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
-                        item = self.scene.addPixmap(old_pix)
-                    else:
-                        placeholder = QPixmap(img_w_px, img_h_px)
-                        placeholder.fill(QColor(0, 0, 0, 0))
-                        item = self.scene.addPixmap(placeholder)
-                    
-                    worker = ImageRenderWorker(current_gen, global_idx, img_data, img_w_px, img_h_px, item_fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
-                        render_intent_text, is_monochrome, is_matte_simulation, min(self.DPI, doc_render_dpi), doc_color_mode, txt_font, txt_size, cache_key)
-                    worker.signals.finished.connect(self.on_async_render_finished)
-                    worker.signals.failed.connect(self.on_async_render_failed)
-                    self.render_thread_pool.start(worker)
+                    h_code = img_data.get('h_code'); landscape = img_data.get('landscape', False)
+                    if w_code < 0: w_val, h_val = self.calculate_dynamic_size(w_code)
+                    else: w_val, h_val = w_code, h_code
+                    if landscape: w_val, h_val = h_val, w_val
+                    raw_w = int(w_val * self.PPM); raw_h = int(h_val * self.PPM)
 
-            item.setPos(draw_x, draw_y); item.setData(0, global_idx); self.canvas_pixmap_items[global_idx] = item
-            
-            if getattr(self, 'active_canvas_index', None) == global_idx:
-                self.highlight_item = QGraphicsRectItem(draw_x, draw_y, img_w_px, img_h_px)
-                highlight_color = QColor(56, 189, 248) if self.is_dark_mode else QColor(37, 99, 235)
-                pen = QPen(highlight_color, 4); pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin); self.highlight_item.setPen(pen)
-                self.highlight_item.setBrush(QColor(0, 0, 0, 0)); self.highlight_item.setData(0, global_idx); self.highlight_item.setZValue(1000)
-                self.highlight_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-                self.scene.addItem(self.highlight_item)
-            
-            col_idx += 1
+                img_w_px = min(raw_w, max(1, printable_width))
+                img_h_px = min(raw_h, max(1, printable_height))
+                
+                draw_x = cx + (photo_w_px - img_w_px) // 2
+                draw_y = cy + (photo_h_px - img_h_px) // 2
+
+                if draw_x < margin_px: draw_x = margin_px
+                if draw_y < margin_px: draw_y = margin_px
+                if draw_x + img_w_px > margin_px + printable_width: draw_x = margin_px + printable_width - img_w_px
+                if draw_y + img_h_px > margin_px + printable_height: draw_y = margin_px + printable_height - img_h_px
+
+                cell = QGraphicsRectItem(draw_x, draw_y, img_w_px, img_h_px)
+                cell.setPen(dash_pen); cell.setBrush(QColor(0, 0, 0, 0)); self.scene.addItem(cell)
+                self.cell_border_items.append(cell)
+                if not is_borderless: self.draw_corner_crop_marks(draw_x, draw_y, img_w_px, img_h_px)
+
+                path = img_data['path']
+                try: mtime = os.path.getmtime(path)
+                except OSError: mtime = 0
+                    
+                gray = img_data.get('gray', False); sepia = img_data.get('sepia', False)
+                b = round(img_data.get('b', 1.0), 2); c = round(img_data.get('c', 1.0), 2); s = round(img_data.get('s', 1.0), 2)
+                crop_x = round(img_data.get('crop_x', 0.5), 3); crop_y = round(img_data.get('crop_y', 0.5), 3)
+                zoom_scale = img_data.get('zoom', 1.0); page_num = img_data.get('page', 0); high_contrast = img_data.get('high_contrast', False)
+                
+                item_fit_mode = img_data.get('fit_mode', global_fit_mode)
+                
+                cache_key = (
+                    path, page_num, mtime, img_w_px, img_h_px, item_fit_mode, gray, sepia, b, c, s, sharp_mode, soft_proof_active, 
+                    active_icc_path, render_intent_text, crop_x, crop_y, zoom_scale, is_monochrome, is_matte_simulation, doc_color_mode, high_contrast,
+                    doc_render_dpi, txt_font, txt_size
+                )
+
+                if sync:
+                    try:
+                        qim = process_image_pipeline(img_data, img_w_px, img_h_px, item_fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
+                            render_intent_text, is_monochrome, is_matte_simulation, render_dpi=self.DPI, doc_color_mode=doc_color_mode, txt_font=txt_font, txt_size=txt_size)
+                        pixmap = QPixmap.fromImage(qim)
+                    except Exception: continue
+                    item = self.scene.addPixmap(pixmap)
+                else:
+                    if cache_key in self.pixmap_cache:
+                        self.pixmap_cache.move_to_end(cache_key)
+                        item = self.scene.addPixmap(self.pixmap_cache[cache_key])
+                    else:
+                        if global_idx in old_pixmaps:
+                            old_pix = old_pixmaps[global_idx]
+                            if old_pix.width() != img_w_px or old_pix.height() != img_h_px:
+                                old_pix = old_pix.scaled(img_w_px, img_h_px, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
+                            item = self.scene.addPixmap(old_pix)
+                        else:
+                            placeholder = QPixmap(img_w_px, img_h_px)
+                            placeholder.fill(QColor(0, 0, 0, 0))
+                            item = self.scene.addPixmap(placeholder)
+                        
+                        worker = ImageRenderWorker(current_gen, global_idx, img_data, img_w_px, img_h_px, item_fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
+                            render_intent_text, is_monochrome, is_matte_simulation, min(self.DPI, doc_render_dpi), doc_color_mode, txt_font, txt_size, cache_key)
+                        worker.signals.finished.connect(self.on_async_render_finished)
+                        worker.signals.failed.connect(self.on_async_render_failed)
+                        self.render_thread_pool.start(worker)
+
+                item.setPos(draw_x, draw_y); item.setData(0, global_idx); self.canvas_pixmap_items[global_idx] = item
+                
+                if getattr(self, 'active_canvas_index', None) == global_idx:
+                    self.highlight_item = QGraphicsRectItem(draw_x, draw_y, img_w_px, img_h_px)
+                    highlight_color = QColor(56, 189, 248) if self.is_dark_mode else QColor(37, 99, 235)
+                    pen = QPen(highlight_color, 4); pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin); self.highlight_item.setPen(pen)
+                    self.highlight_item.setBrush(QColor(0, 0, 0, 0)); self.highlight_item.setData(0, global_idx); self.highlight_item.setZValue(1000)
+                    self.highlight_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                    self.scene.addItem(self.highlight_item)
+
+            else:
+                cell = QGraphicsRectItem(cx, cy, photo_w_px, photo_h_px)
+                cell.setPen(dash_pen); cell.setBrush(QColor(0, 0, 0, 0)); self.scene.addItem(cell)
+                self.cell_border_items.append(cell)
+                if not is_borderless: self.draw_corner_crop_marks(cx, cy, photo_w_px, photo_h_px)
             
         if reset_zoom and not self.view.user_zoomed:
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
