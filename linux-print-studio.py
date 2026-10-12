@@ -73,6 +73,7 @@ CONFIG = {
     "CROP_NUDGE_STEP": 0.04,
     "CROP_NUDGE_MICRO_STEP": 0.01,
 }
+# ==============================================================================
 
 DOC_CACHE_DIR = f"/tmp/photoprint_doc_cache_{os.getuid()}"
 os.makedirs(DOC_CACHE_DIR, exist_ok=True)
