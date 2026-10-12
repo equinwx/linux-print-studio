@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""
-Linux Native Document & Photo Studio (Professional Prepress Edition)
-Platform: Linux (Optimized for LMDE 7 / Debian 12 / Ubuntu)
-Dependencies: PyQt6, Pillow (Optional: PyMuPDF / fitz, pypdfium2)
-"""
-
 import sys
 import os
 import shutil
@@ -43,7 +37,6 @@ try:
     HAS_PYPDFIUM = True
 except ImportError: HAS_PYPDFIUM = False
 
-# ⚙️ USER CONTROL PANEL:
 CONFIG = {
     "DEFAULT_THEME": "dark",
     "UI_FONT_SIZE": 13,
@@ -73,7 +66,6 @@ CONFIG = {
     "CROP_NUDGE_STEP": 0.04,
     "CROP_NUDGE_MICRO_STEP": 0.01,
 }
-# ==============================================================================
 
 DOC_CACHE_DIR = f"/tmp/photoprint_doc_cache_{os.getuid()}"
 os.makedirs(DOC_CACHE_DIR, exist_ok=True)
@@ -243,16 +235,35 @@ def process_image_pipeline(img_data, img_w_px, img_h_px, fit_mode, sharp_mode, s
                 pil_img = ImageOps.pad(pil_img, (img_w_px, img_h_px), method=Image.Resampling.LANCZOS, color=(255, 255, 255, 0))
 
         if is_doc:
-            if "High Contrast" in doc_color_mode or img_data.get('high_contrast', False): pil_img = ImageOps.grayscale(pil_img).point(lambda p: 255 if p > 185 else 0).convert("RGBA")
-            elif "Invert" in doc_color_mode: r, g, b_ch, a = pil_img.split(); pil_img = Image.merge("RGBA", (*ImageOps.invert(Image.merge("RGB", (r, g, b_ch))).split(), a))
-            elif "Grayscale" in doc_color_mode or is_monochrome: pil_img = ImageOps.grayscale(pil_img).convert("RGBA")
+            if "High Contrast" in doc_color_mode or img_data.get('high_contrast', False):
+                if pil_img.mode != 'RGBA': pil_img = pil_img.convert('RGBA')
+                alpha = pil_img.split()[3]
+                pil_img = ImageOps.grayscale(pil_img).point(lambda p: 255 if p > 185 else 0).convert("RGBA")
+                pil_img.putalpha(alpha)
+            elif "Invert" in doc_color_mode:
+                if pil_img.mode != 'RGBA': pil_img = pil_img.convert('RGBA')
+                r, g, b_ch, a = pil_img.split()
+                pil_img = Image.merge("RGBA", (*ImageOps.invert(Image.merge("RGB", (r, g, b_ch))).split(), a))
+            elif "Grayscale" in doc_color_mode or is_monochrome:
+                if pil_img.mode != 'RGBA': pil_img = pil_img.convert('RGBA')
+                alpha = pil_img.split()[3]
+                pil_img = ImageOps.grayscale(pil_img).convert("RGBA")
+                pil_img.putalpha(alpha)
         else:
-            if is_monochrome or img_data.get('gray', False): pil_img = ImageOps.grayscale(pil_img).convert("RGBA")
-            elif img_data.get('sepia', False): pil_img = ImageOps.colorize(ImageOps.grayscale(pil_img), black="#251304", white="#F3E8D0").convert("RGBA")
+            if pil_img.mode != 'RGBA': pil_img = pil_img.convert('RGBA')
+            alpha = pil_img.split()[3]
+            pil_rgb = pil_img.convert('RGB')
+            
+            if is_monochrome or img_data.get('gray', False): pil_rgb = ImageOps.grayscale(pil_rgb).convert("RGB")
+            elif img_data.get('sepia', False): pil_rgb = ImageOps.colorize(ImageOps.grayscale(pil_rgb), black="#251304", white="#F3E8D0").convert("RGB")
+            
             b, c, s = img_data.get('b', 1.0), img_data.get('c', 1.0), img_data.get('s', 1.0)
-            if b != 1.0: pil_img = ImageEnhance.Brightness(pil_img).enhance(b)
-            if c != 1.0: pil_img = ImageEnhance.Contrast(pil_img).enhance(c)
-            if s != 1.0 and not img_data.get('gray', False): pil_img = ImageEnhance.Color(pil_img).enhance(s)
+            if b != 1.0: pil_rgb = ImageEnhance.Brightness(pil_rgb).enhance(b)
+            if c != 1.0: pil_rgb = ImageEnhance.Contrast(pil_rgb).enhance(c)
+            if s != 1.0 and not (is_monochrome or img_data.get('gray', False)): pil_rgb = ImageEnhance.Color(pil_rgb).enhance(s)
+            
+            pil_img = pil_rgb.convert("RGBA")
+            pil_img.putalpha(alpha)
 
         if "Low" in sharp_mode: pil_img = pil_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=50, threshold=3))
         elif "Standard" in sharp_mode: pil_img = pil_img.filter(ImageFilter.UnsharpMask(radius=1.5, percent=85, threshold=3))
@@ -370,8 +381,10 @@ class CanvasView(QGraphicsView):
                     scale_up = 800.0 / max(pw, ph); pw = max(10, int(pw * scale_up)); ph = max(10, int(ph * scale_up))
                 sw, sh = self._interact_pil.width, self._interact_pil.height
                 
-                fit_mode = self.main_window.combo_fit_mode.currentText()
-                is_fill = True if (is_doc_file(img_data['path']) and fit_mode.startswith("Fill") and cx == 0.5 and cy == 0.5) else fit_mode.startswith("Fill")
+                global_fit = self.main_window.combo_fit_mode.currentText()
+                item_fit_mode = img_data.get('fit_mode', global_fit)
+                fit_mode = "Fit" if (is_doc_file(img_data['path']) and item_fit_mode.startswith("Fill") and cx == 0.5 and cy == 0.5) else item_fit_mode
+                is_fill = fit_mode.startswith("Fill")
 
                 b_fit = min(pw / sw, ph / sh); b_fill = max(pw / sw, ph / sh)
                 S = (b_fill * zoom_scale) if is_fill else (b_fit * zoom_scale)
@@ -392,12 +405,20 @@ class CanvasView(QGraphicsView):
                 if is_fill or fit_mode.startswith("Stretch"): crp = crp.resize((pw, ph), Image.Resampling.NEAREST)
                 else: crp = ImageOps.pad(crp, (pw, ph), method=Image.Resampling.NEAREST, color=(255, 255, 255, 0))
                 
-                if img_data.get('gray', False): crp = ImageOps.grayscale(crp).convert("RGBA")
-                elif img_data.get('sepia', False): crp = ImageOps.colorize(ImageOps.grayscale(crp), black="#251304", white="#F3E8D0").convert("RGBA")
+                if crp.mode != 'RGBA': crp = crp.convert('RGBA')
+                alpha = crp.split()[3]
+                crp_rgb = crp.convert('RGB')
+                
+                if img_data.get('gray', False): crp_rgb = ImageOps.grayscale(crp_rgb).convert("RGB")
+                elif img_data.get('sepia', False): crp_rgb = ImageOps.colorize(ImageOps.grayscale(crp_rgb), black="#251304", white="#F3E8D0").convert("RGB")
+                
                 br, ct, sa = img_data.get('b', 1.0), img_data.get('c', 1.0), img_data.get('s', 1.0)
-                if br != 1.0: crp = ImageEnhance.Brightness(crp).enhance(br)
-                if ct != 1.0: crp = ImageEnhance.Contrast(crp).enhance(ct)
-                if sa != 1.0 and not img_data.get('gray', False): crp = ImageEnhance.Color(crp).enhance(sa)
+                if br != 1.0: crp_rgb = ImageEnhance.Brightness(crp_rgb).enhance(br)
+                if ct != 1.0: crp_rgb = ImageEnhance.Contrast(crp_rgb).enhance(ct)
+                if sa != 1.0 and not img_data.get('gray', False): crp_rgb = ImageEnhance.Color(crp_rgb).enhance(sa)
+                
+                crp = crp_rgb.convert("RGBA")
+                crp.putalpha(alpha)
                 
                 pix = QPixmap.fromImage(QImage(crp.tobytes("raw", "RGBA"), crp.width, crp.height, QImage.Format.Format_RGBA8888))
                 if scale_up != 1.0: pix = pix.scaled(tw, th, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.FastTransformation)
@@ -441,16 +462,16 @@ class CanvasView(QGraphicsView):
             t_zoom = b_fill / b_fit if b_fit > 0 else 1.0
             
             new_zoom = img_data.get('zoom', 1.0) * (1.10 ** (event.angleDelta().y() / 120.0))
-            fit_mode = self.main_window.combo_fit_mode.currentText(); switched = False
+            fit_mode = img_data.get('fit_mode', self.main_window.combo_fit_mode.currentText()); switched = False
             
             if fit_mode.startswith("Fit"):
                 new_zoom = max(1.0, new_zoom)
                 if new_zoom >= t_zoom:
-                    self.main_window.combo_fit_mode.blockSignals(True); self.main_window.combo_fit_mode.setCurrentIndex(0); self.main_window.combo_fit_mode.blockSignals(False)
+                    img_data['fit_mode'] = "Fill (Crop to Fit - Default)"
                     new_zoom = new_zoom / t_zoom; switched = True
             elif fit_mode.startswith("Fill"):
                 if new_zoom < 1.0:
-                    self.main_window.combo_fit_mode.blockSignals(True); self.main_window.combo_fit_mode.setCurrentIndex(1); self.main_window.combo_fit_mode.blockSignals(False)
+                    img_data['fit_mode'] = "Fit (Letterbox Blank Edges)"
                     new_zoom = new_zoom * t_zoom; switched = True
                 else: new_zoom = min(10.0, new_zoom)
 
@@ -478,6 +499,10 @@ class CanvasView(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton and clicking_photo:
             idx = item.data(0); mods = event.modifiers()
             if (mods & Qt.KeyboardModifier.ShiftModifier) or (mods & Qt.KeyboardModifier.AltModifier):
+                img_data = self.main_window.selected_images_for_print[idx]
+                if not img_data.get('fit_mode', self.main_window.combo_fit_mode.currentText()).startswith("Fill"):
+                    img_data['fit_mode'] = "Fill (Crop to Fit - Default)"
+
                 if self._ensure_fast_preview_loaded(idx, pos):
                     self._is_crop_nudging = True; self._is_dragging_crop = True
                     self._drag_start_pos = pos; self.setCursor(Qt.CursorShape.SizeAllCursor); self._interact_timer.stop()
@@ -503,7 +528,7 @@ class CanvasView(QGraphicsView):
                 try: tw, th = max(10, int(self._interact_item.boundingRect().width())), max(10, int(self._interact_item.boundingRect().height()))
                 except RuntimeError: return event.accept()
                 
-                fit_mode = self.main_window.combo_fit_mode.currentText()
+                fit_mode = img_data.get('fit_mode', self.main_window.combo_fit_mode.currentText())
                 S = (max(tw / sw, th / sh) if fit_mode.startswith("Fill") else min(tw / sw, th / sh)) * zoom_scale
                 
                 sensitivity_x = 1.0 / (sw * S) if sw * S > 0 else 0.003
@@ -585,7 +610,10 @@ class CanvasView(QGraphicsView):
                 elif action == act_fit_full: data['w_code'] = -1; data['h_code'] = -1; self.main_window.combo_photo.setCurrentIndex(0); state_changed = True
                 elif action == act_rotate: data['landscape'] = not data.get('landscape', False); state_changed = True
                 elif action == act_toggle_hc: data['high_contrast'] = not data.get('high_contrast', False); state_changed = True
-                elif action == act_reset_crop: data['crop_x'] = 0.5; data['crop_y'] = 0.5; data['zoom'] = 1.0; state_changed = True
+                elif action == act_reset_crop: 
+                    data['crop_x'] = 0.5; data['crop_y'] = 0.5; data['zoom'] = 1.0
+                    if 'fit_mode' in data: del data['fit_mode']
+                    state_changed = True
                 elif action == act_remove: self.main_window.selected_images_for_print.pop(idx); self.main_window.active_canvas_index = None; state_changed = True
             else:
                 size_menu = menu.addMenu("📐 Change Photo Size")
@@ -609,7 +637,10 @@ class CanvasView(QGraphicsView):
                             new_h, ok2 = QInputDialog.getInt(self, "Custom Height", "Height in mm (10-500):", int(curr_h), 10, 500)
                             if ok2: data['w_code'] = new_w; data['h_code'] = new_h; data['landscape'] = False; state_changed = True
                     else: w, h = action.data(); data['w_code'] = w; data['h_code'] = h; data['landscape'] = self.main_window.check_photo_landscape.isChecked(); state_changed = True
-                elif action == act_reset_crop: data['crop_x'] = 0.5; data['crop_y'] = 0.5; data['zoom'] = 1.0; state_changed = True
+                elif action == act_reset_crop: 
+                    data['crop_x'] = 0.5; data['crop_y'] = 0.5; data['zoom'] = 1.0
+                    if 'fit_mode' in data: del data['fit_mode']
+                    state_changed = True
                 elif action == act_remove: self.main_window.selected_images_for_print.pop(idx); self.main_window.active_canvas_index = None; state_changed = True
                 elif action == act_none:
                     self.main_window.selected_images_for_print[idx] = {
@@ -739,7 +770,7 @@ class PhotoPrintApp(QMainWindow):
         self.layout_photo.addRow(self.label_custom_w, self.spin_custom_w); self.layout_photo.addRow(self.label_custom_h, self.spin_custom_h); self.layout_photo.addRow("", self.check_photo_landscape)
 
         self.combo_fit_mode = QComboBox(); self.combo_fit_mode.addItems(["Fill (Crop to Fit - Default)", "Fit (Letterbox Blank Edges)", "Stretch (Distort to Fit)"])
-        self.combo_fit_mode.setCurrentIndex(CONFIG["DEFAULT_FIT_MODE"]); self.combo_fit_mode.currentIndexChanged.connect(lambda: self.trigger_layout_change(preserve_zoom=True))
+        self.combo_fit_mode.setCurrentIndex(CONFIG["DEFAULT_FIT_MODE"]); self.combo_fit_mode.currentIndexChanged.connect(self.apply_global_fit_mode)
         self.layout_photo.addRow("Photo Snapping:", self.combo_fit_mode)
 
         self.spin_spacing = QSpinBox(); self.spin_spacing.setRange(0, 50); self.spin_spacing.setValue(CONFIG["DEFAULT_SPACING_MM"]); self.spin_spacing.valueChanged.connect(self.schedule_layout_update)
@@ -930,6 +961,12 @@ class PhotoPrintApp(QMainWindow):
     def schedule_layout_update(self): self._layout_timer.start()
     def on_borderless_toggled(self): self.spin_margin.setEnabled(not self.check_borderless.isChecked()); self.trigger_layout_change(preserve_zoom=True)
 
+    def apply_global_fit_mode(self):
+        mode = self.combo_fit_mode.currentText()
+        for img in self.selected_images_for_print:
+            img['fit_mode'] = mode
+        self.trigger_layout_change(preserve_zoom=True)
+
     def apply_global_photo_size(self):
         w, h = (self.spin_custom_w.value(), self.spin_custom_h.value()) if self.combo_photo.currentText() == "Custom Size" else self.combo_photo.currentData()
         landscape = self.check_photo_landscape.isChecked()
@@ -986,6 +1023,10 @@ class PhotoPrintApp(QMainWindow):
         idx = self.active_canvas_index
         if idx is not None and idx < len(self.selected_images_for_print):
             data = self.selected_images_for_print[idx]; zoom_scale = data.get('zoom', 1.0)
+            item_fit_mode = data.get('fit_mode', self.combo_fit_mode.currentText())
+            if not item_fit_mode.startswith("Fill"):
+                data['fit_mode'] = "Fill (Crop to Fit - Default)"
+                
             data['crop_x'] = max(0.0, min(1.0, data.get('crop_x', 0.5) + (dx / zoom_scale)))
             data['crop_y'] = max(0.0, min(1.0, data.get('crop_y', 0.5) + (dy / zoom_scale)))
             if self.view._ensure_fast_preview_loaded(idx): self.view._update_live_preview(); self.view._interact_timer.start(400)
@@ -1080,33 +1121,37 @@ class PhotoPrintApp(QMainWindow):
         f_size = CONFIG["UI_FONT_SIZE"]
         if self.is_dark_mode:
             stylesheet = f"""
-                QWidget {{ background-color: #0F172A; color: #F8FAFC; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ubuntu', Roboto, sans-serif; font-size: {f_size}px; }}
+                QWidget {{ background-color: #0F172A; color: #F8FAFC; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: {f_size}px; }}
                 QLabel {{ color: #F8FAFC; font-weight: 600; font-size: {f_size}px; }}
                 QCheckBox {{ color: #F1F5F9; font-weight: 500; font-size: {f_size}px; spacing: 8px; }}
                 QCheckBox::indicator {{ width: 17px; height: 17px; border-radius: 4px; border: 1.5px solid #475569; background-color: #1E293B; }}
-                QCheckBox::indicator:hover {{ border-color: #38BDF8; }}
+                QCheckBox::indicator:hover {{ border-color: #38BDF8; background-color: #273549; }}
                 QCheckBox::indicator:checked {{ background-color: #2563EB; border-color: #38BDF8; }}
                 QPushButton {{ background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 7px 12px; font-weight: 600; font-size: {f_size}px; color: #F8FAFC; }}
-                QPushButton:hover {{ background-color: #273549; border-color: #475569; }}
-                QPushButton:pressed {{ background-color: #0F172A; }}
+                QPushButton:hover {{ background-color: #273549; border-color: #64748B; }}
+                QPushButton:pressed {{ background-color: #0F172A; border-color: #38BDF8; color: #38BDF8; }}
                 QPushButton:disabled {{ background-color: #151F2E; color: #475569; border-color: #1E293B; }}
                 QPushButton#ActionBtn {{ background-color: #2563EB; color: #FFFFFF; border: none; padding: 10px; font-size: {f_size+1}px; margin-top: 4px; }}
-                QPushButton#ActionBtn:hover {{ background-color: #1D4ED8; }}
+                QPushButton#ActionBtn:hover {{ background-color: #1D4ED8; border: 1px solid #93C5FD; }}
+                QPushButton#ActionBtn:pressed {{ background-color: #1E40AF; }}
                 QPushButton#PdfBtn {{ background-color: #059669; color: #FFFFFF; border: none; padding: 10px; font-size: {f_size}px; }}
-                QPushButton#PdfBtn:hover {{ background-color: #047857; }}
+                QPushButton#PdfBtn:hover {{ background-color: #047857; border: 1px solid #6EE7B7; }}
+                QPushButton#PdfBtn:pressed {{ background-color: #064E3B; }}
                 QPushButton#OdtBtn {{ background-color: #65A30D; color: #FFFFFF; border: none; padding: 10px; font-size: {f_size}px; }}
-                QPushButton#OdtBtn:hover {{ background-color: #4D7C0F; }}
+                QPushButton#OdtBtn:hover {{ background-color: #4D7C0F; border: 1px solid #BEF264; }}
+                QPushButton#OdtBtn:pressed {{ background-color: #3F6212; }}
                 QListWidget, QTreeView {{ background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; outline: none; color: #F8FAFC; }}
                 QListWidget::item:hover, QTreeView::item:hover {{ background-color: #273549; border-radius: 4px; }}
                 QListWidget::item:selected, QTreeView::item:selected {{ background-color: #2563EB; color: #FFFFFF; border-radius: 4px; }}
                 QComboBox, QSpinBox {{ background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 5px 8px; color: #F8FAFC; font-weight: 600; font-size: {f_size}px; }}
-                QComboBox:focus, QSpinBox:focus {{ border: 1.5px solid #38BDF8; }}
+                QComboBox:hover, QSpinBox:hover {{ border: 1.5px solid #64748B; background-color: #273549; }}
+                QComboBox:focus, QSpinBox:focus {{ border: 1.5px solid #38BDF8; background-color: #1E293B; }}
                 QComboBox::drop-down {{ border: none; }}
                 QComboBox QAbstractItemView {{ background-color: #1E293B; border: 1px solid #334155; color: #F8FAFC; selection-background-color: #2563EB; selection-color: #FFFFFF; }}
                 QTabWidget::pane {{ border: 1px solid #334155; background: #1E293B; border-radius: 6px; }}
-                QTabBar::tab {{ background: #0F172A; padding: 8px 12px; margin-right: 2px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; font-size: {f_size-1}px; color: #94A3B8; }}
-                QTabBar::tab:hover {{ color: #F8FAFC; }}
-                QTabBar::tab:selected {{ background: #2563EB; color: #FFFFFF; }}
+                QTabBar::tab {{ background: #0F172A; padding: 8px 12px; margin-right: 2px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; font-size: {f_size-1}px; color: #94A3B8; border: 1px solid transparent; }}
+                QTabBar::tab:hover {{ color: #F8FAFC; background-color: #1E293B; border: 1px solid #334155; }}
+                QTabBar::tab:selected {{ background: #2563EB; color: #FFFFFF; border: 1px solid #2563EB; }}
                 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0px; }}
                 QScrollBar::handle:vertical {{ background: #334155; min-height: 25px; border-radius: 5px; }}
                 QScrollBar::handle:vertical:hover {{ background: #475569; }}
@@ -1124,33 +1169,37 @@ class PhotoPrintApp(QMainWindow):
             self.pagination_bar.setStyleSheet("background-color: #1E293B; border-radius: 6px; border: 1px solid #334155;")
         else:
             stylesheet = f"""
-                QWidget {{ background-color: #F8FAFC; color: #0F172A; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ubuntu', Roboto, sans-serif; font-size: {f_size}px; }}
+                QWidget {{ background-color: #F8FAFC; color: #0F172A; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: {f_size}px; }}
                 QLabel {{ color: #0F172A; font-weight: 600; font-size: {f_size}px; }}
                 QCheckBox {{ color: #0F172A; font-weight: 500; font-size: {f_size}px; spacing: 8px; }}
                 QCheckBox::indicator {{ width: 17px; height: 17px; border-radius: 4px; border: 1.5px solid #CBD5E1; background-color: #FFFFFF; }}
-                QCheckBox::indicator:hover {{ border-color: #2563EB; }}
+                QCheckBox::indicator:hover {{ border-color: #2563EB; background-color: #F1F5F9; }}
                 QCheckBox::indicator:checked {{ background-color: #2563EB; border-color: #2563EB; }}
                 QPushButton {{ background-color: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; padding: 7px 12px; font-weight: 600; font-size: {f_size}px; color: #0F172A; }}
                 QPushButton:hover {{ background-color: #F1F5F9; border-color: #94A3B8; }}
-                QPushButton:pressed {{ background-color: #E2E8F0; }}
+                QPushButton:pressed {{ background-color: #E2E8F0; border-color: #2563EB; color: #2563EB; }}
                 QPushButton:disabled {{ background-color: #F1F5F9; color: #94A3B8; border-color: #E2E8F0; }}
                 QPushButton#ActionBtn {{ background-color: #2563EB; color: #FFFFFF; border: none; padding: 10px; font-size: {f_size+1}px; margin-top: 4px; }}
-                QPushButton#ActionBtn:hover {{ background-color: #1D4ED8; }}
+                QPushButton#ActionBtn:hover {{ background-color: #1D4ED8; border: 1px solid #93C5FD; }}
+                QPushButton#ActionBtn:pressed {{ background-color: #1E40AF; }}
                 QPushButton#PdfBtn {{ background-color: #059669; color: #FFFFFF; border: none; padding: 10px; font-size: {f_size}px; }}
-                QPushButton#PdfBtn:hover {{ background-color: #047857; }}
+                QPushButton#PdfBtn:hover {{ background-color: #047857; border: 1px solid #6EE7B7; }}
+                QPushButton#PdfBtn:pressed {{ background-color: #064E3B; }}
                 QPushButton#OdtBtn {{ background-color: #65A30D; color: #FFFFFF; border: none; padding: 10px; font-size: {f_size}px; }}
-                QPushButton#OdtBtn:hover {{ background-color: #4D7C0F; }}
+                QPushButton#OdtBtn:hover {{ background-color: #4D7C0F; border: 1px solid #BEF264; }}
+                QPushButton#OdtBtn:pressed {{ background-color: #3F6212; }}
                 QListWidget, QTreeView {{ background-color: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; outline: none; color: #0F172A; }}
                 QListWidget::item:hover, QTreeView::item:hover {{ background-color: #F1F5F9; border-radius: 4px; }}
                 QListWidget::item:selected, QTreeView::item:selected {{ background-color: #DBEAFE; color: #1E3A8A; border-radius: 4px; }}
                 QComboBox, QSpinBox {{ background-color: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; padding: 5px 8px; color: #0F172A; font-weight: 600; font-size: {f_size}px; }}
-                QComboBox:focus, QSpinBox:focus {{ border: 1.5px solid #2563EB; }}
+                QComboBox:hover, QSpinBox:hover {{ border: 1.5px solid #94A3B8; background-color: #F1F5F9; }}
+                QComboBox:focus, QSpinBox:focus {{ border: 1.5px solid #2563EB; background-color: #FFFFFF; }}
                 QComboBox::drop-down {{ border: none; }}
                 QComboBox QAbstractItemView {{ background-color: #FFFFFF; border: 1px solid #CBD5E1; color: #0F172A; selection-background-color: #DBEAFE; selection-color: #1E3A8A; }}
                 QTabWidget::pane {{ border: 1px solid #CBD5E1; background: #FFFFFF; border-radius: 6px; }}
-                QTabBar::tab {{ background: #F1F5F9; padding: 8px 12px; margin-right: 2px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; font-size: {f_size-1}px; color: #64748B; }}
-                QTabBar::tab:hover {{ color: #0F172A; }}
-                QTabBar::tab:selected {{ background: #2563EB; color: #FFFFFF; }}
+                QTabBar::tab {{ background: #F1F5F9; padding: 8px 12px; margin-right: 2px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; font-size: {f_size-1}px; color: #64748B; border: 1px solid transparent; }}
+                QTabBar::tab:hover {{ color: #0F172A; background-color: #E2E8F0; border: 1px solid #CBD5E1; }}
+                QTabBar::tab:selected {{ background: #2563EB; color: #FFFFFF; border: 1px solid #2563EB; }}
                 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0px; }}
                 QScrollBar::handle:vertical {{ background: #CBD5E1; min-height: 25px; border-radius: 5px; }}
                 QScrollBar::handle:vertical:hover {{ background: #94A3B8; }}
@@ -1344,7 +1393,7 @@ class PhotoPrintApp(QMainWindow):
                 if not is_borderless: self.draw_corner_crop_marks(cx, cy, photo_w_px, photo_h_px)
         
         col_idx = 0; row_idx = 0
-        fit_mode = self.combo_fit_mode.currentText(); sharp_mode = self.combo_sharpen.currentText()
+        global_fit_mode = self.combo_fit_mode.currentText(); sharp_mode = self.combo_sharpen.currentText()
         soft_proof_active = self.check_soft_proof.isChecked(); render_intent_text = self.combo_intent.currentText()
         is_monochrome = (self.combo_color.currentData() == QPrinter.ColorMode.GrayScale)
         icc_selection = self.combo_icc.currentText()
@@ -1393,15 +1442,17 @@ class PhotoPrintApp(QMainWindow):
             crop_x = round(img_data.get('crop_x', 0.5), 3); crop_y = round(img_data.get('crop_y', 0.5), 3)
             zoom_scale = img_data.get('zoom', 1.0); page_num = img_data.get('page', 0); high_contrast = img_data.get('high_contrast', False)
             
+            item_fit_mode = img_data.get('fit_mode', global_fit_mode)
+            
             cache_key = (
-                path, page_num, mtime, img_w_px, img_h_px, fit_mode, gray, sepia, b, c, s, sharp_mode, soft_proof_active, 
+                path, page_num, mtime, img_w_px, img_h_px, item_fit_mode, gray, sepia, b, c, s, sharp_mode, soft_proof_active, 
                 active_icc_path, render_intent_text, crop_x, crop_y, zoom_scale, is_monochrome, is_matte_simulation, doc_color_mode, high_contrast,
                 doc_render_dpi, txt_font, txt_size
             )
 
             if sync:
                 try:
-                    qim = process_image_pipeline(img_data, img_w_px, img_h_px, fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
+                    qim = process_image_pipeline(img_data, img_w_px, img_h_px, item_fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
                         render_intent_text, is_monochrome, is_matte_simulation, render_dpi=self.DPI, doc_color_mode=doc_color_mode, txt_font=txt_font, txt_size=txt_size)
                     pixmap = QPixmap.fromImage(qim)
                 except Exception: col_idx += 1; continue
@@ -1421,7 +1472,7 @@ class PhotoPrintApp(QMainWindow):
                         placeholder.fill(QColor(0, 0, 0, 0))
                         item = self.scene.addPixmap(placeholder)
                     
-                    worker = ImageRenderWorker(current_gen, global_idx, img_data, img_w_px, img_h_px, fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
+                    worker = ImageRenderWorker(current_gen, global_idx, img_data, img_w_px, img_h_px, item_fit_mode, sharp_mode, soft_proof_active, active_icc_path, 
                         render_intent_text, is_monochrome, is_matte_simulation, min(self.DPI, doc_render_dpi), doc_color_mode, txt_font, txt_size, cache_key)
                     worker.signals.finished.connect(self.on_async_render_finished)
                     worker.signals.failed.connect(self.on_async_render_failed)
