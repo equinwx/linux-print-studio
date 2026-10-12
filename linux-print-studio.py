@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import sys
 import os
+
+# Suppress harmless internal C++ Qt libpng CRC warnings from cluttering the terminal
+os.environ["QT_LOGGING_RULES"] = "qt.gui.imageio.warning=false"
+
 import shutil
 import zipfile
 import copy
@@ -15,7 +19,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QListWidgetItem, QGraphicsRectItem, QComboBox, QCheckBox,
                              QTabWidget, QFormLayout, QListView, QMessageBox, 
                              QMenu, QGraphicsPixmapItem, QInputDialog, QTreeView,
-                             QScrollArea)
+                             QScrollArea, QGridLayout)
 from PyQt6.QtGui import (QPixmap, QPainter, QColor, QIcon, QKeySequence, 
                          QShortcut, QPageSize, QPageLayout, QFont, QImage, QPen,
                          QDrag, QFileSystemModel, QImageReader, QTextDocument)
@@ -333,7 +337,7 @@ class CanvasView(QGraphicsView):
         self._interact_timer = QTimer(self); self._interact_timer.setSingleShot(True); self._interact_timer.setInterval(400)
         self._interact_timer.timeout.connect(self._commit_interaction)
         self._interact_idx = None; self._interact_item = None; self._interact_pil = None
-        self._drag_start_pos = None; self._is_crop_nudging = False; self._zoom_pause_until = 0
+        self._drag_start_pos = None; self._is_crop_nudging = False; self._zoom_pause_until = 0; self._last_preview_time = 0.0
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -365,6 +369,10 @@ class CanvasView(QGraphicsView):
             self._interact_pil = None; self._interact_item = None; self._interact_idx = None; return False
 
     def _update_live_preview(self):
+        now = time.time()
+        if now - self._last_preview_time < 0.016: return
+        self._last_preview_time = now
+
         if not (getattr(self, '_is_crop_nudging', False) and self._interact_item): return
         if self._interact_idx is None or self._interact_idx >= len(self.main_window.selected_images_for_print): return
         
@@ -620,7 +628,7 @@ class CanvasView(QGraphicsView):
             else:
                 size_menu = menu.addMenu("📐 Change Photo Size")
                 for name, w, h in self.main_window.photo_presets:
-                    if name != "Custom Size": size_menu.addAction(name)
+                    if name != "Custom Size": size_menu.addAction(name).setData((w, h))
                 act_custom_size = size_menu.addAction("Set Custom Size (mm)...")
                 menu.addSeparator(); act_reset_crop = menu.addAction("🎯 Reset Framing & Zoom"); menu.addSeparator()
                 act_bright = menu.addAction("Brighten (+10%)"); act_dark = menu.addAction("Darken (-10%)")
@@ -834,8 +842,35 @@ class PhotoPrintApp(QMainWindow):
         self.check_paper_landscape = QCheckBox("Rotate Paper (Landscape)"); self.check_paper_landscape.stateChanged.connect(lambda: [log_event("Paper orientation toggled"), self.trigger_layout_change(preserve_zoom=False)])
         layout_universal.addRow("", self.check_paper_landscape)
 
+        self.lbl_margin = QLabel("Page Margin (mm):")
         self.spin_margin = QSpinBox(); self.spin_margin.setRange(0, 50); self.spin_margin.setValue(CONFIG["DEFAULT_MARGIN_MM"]); self.spin_margin.valueChanged.connect(self.schedule_layout_update)
-        layout_universal.addRow("Page Margin (mm):", self.spin_margin)
+        layout_universal.addRow(self.lbl_margin, self.spin_margin)
+        
+        self.check_custom_margins = QCheckBox("Use Custom Margins")
+        self.check_custom_margins.stateChanged.connect(self.on_custom_margins_toggled)
+        layout_universal.addRow("", self.check_custom_margins)
+        
+        self.widget_custom_margins = QWidget(); self.widget_custom_margins.setObjectName("scrollBg")
+        grid_cm = QGridLayout(self.widget_custom_margins); grid_cm.setContentsMargins(0, 4, 0, 4); grid_cm.setSpacing(4)
+        
+        self.spin_m_top = QSpinBox(); self.spin_m_top.setRange(0, 50); self.spin_m_top.setValue(CONFIG["DEFAULT_MARGIN_MM"]); self.spin_m_top.setSuffix(" mm"); self.spin_m_top.valueChanged.connect(self.schedule_layout_update); self.spin_m_top.setFixedWidth(75)
+        self.spin_m_left = QSpinBox(); self.spin_m_left.setRange(0, 50); self.spin_m_left.setValue(CONFIG["DEFAULT_MARGIN_MM"]); self.spin_m_left.setSuffix(" mm"); self.spin_m_left.valueChanged.connect(self.schedule_layout_update); self.spin_m_left.setFixedWidth(75)
+        self.spin_m_bottom = QSpinBox(); self.spin_m_bottom.setRange(0, 50); self.spin_m_bottom.setValue(CONFIG["DEFAULT_MARGIN_MM"]); self.spin_m_bottom.setSuffix(" mm"); self.spin_m_bottom.valueChanged.connect(self.schedule_layout_update); self.spin_m_bottom.setFixedWidth(75)
+        self.spin_m_right = QSpinBox(); self.spin_m_right.setRange(0, 50); self.spin_m_right.setValue(CONFIG["DEFAULT_MARGIN_MM"]); self.spin_m_right.setSuffix(" mm"); self.spin_m_right.valueChanged.connect(self.schedule_layout_update); self.spin_m_right.setFixedWidth(75)
+        
+        lbl_t = QLabel("Top:"); lbl_t.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl_l = QLabel("Left:"); lbl_l.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl_b = QLabel("Bottom:"); lbl_b.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lbl_r = QLabel("Right:"); lbl_r.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        
+        grid_cm.addWidget(lbl_t, 0, 0); grid_cm.addWidget(self.spin_m_top, 0, 1)
+        grid_cm.addWidget(lbl_l, 0, 2); grid_cm.addWidget(self.spin_m_left, 0, 3)
+        grid_cm.addWidget(lbl_b, 1, 0); grid_cm.addWidget(self.spin_m_bottom, 1, 1)
+        grid_cm.addWidget(lbl_r, 1, 2); grid_cm.addWidget(self.spin_m_right, 1, 3)
+        grid_cm.setColumnStretch(4, 1)
+        
+        self.widget_custom_margins.setVisible(False)
+        layout_universal.addRow(self.widget_custom_margins)
 
         self.check_borderless = QCheckBox("Borderless (0 mm Bleed)"); self.check_borderless.setChecked(CONFIG["DEFAULT_BORDERLESS"]); self.check_borderless.stateChanged.connect(self.on_borderless_toggled)
         layout_universal.addRow("", self.check_borderless)
@@ -966,8 +1001,29 @@ class PhotoPrintApp(QMainWindow):
             self.label_file_info.setText(f"<b>Sheet Item #{self.active_canvas_index + 1}:</b> {fname}{page_text}<br>{badge}<br><small style='color:#64748B;'>{crop_info}</small>")
         else: self.label_file_info.setText("Selected: None")
 
+    def get_margins_mm(self):
+        if self.check_borderless.isChecked(): return 0.0, 0.0, 0.0, 0.0
+        if self.check_custom_margins.isChecked():
+            return float(self.spin_m_left.value()), float(self.spin_m_top.value()), float(self.spin_m_right.value()), float(self.spin_m_bottom.value())
+        m = float(self.spin_margin.value())
+        return m, m, m, m
+
+    def on_custom_margins_toggled(self):
+        is_custom = self.check_custom_margins.isChecked()
+        self.lbl_margin.setVisible(not is_custom)
+        self.spin_margin.setVisible(not is_custom)
+        self.widget_custom_margins.setVisible(is_custom)
+        self.schedule_layout_update()
+
+    def on_borderless_toggled(self):
+        is_borderless = self.check_borderless.isChecked()
+        self.spin_margin.setEnabled(not is_borderless)
+        self.check_custom_margins.setEnabled(not is_borderless)
+        self.widget_custom_margins.setEnabled(not is_borderless)
+        log_event(f"Borderless printing {'enabled' if is_borderless else 'disabled'}")
+        self.trigger_layout_change(preserve_zoom=True)
+
     def schedule_layout_update(self): self._layout_timer.start()
-    def on_borderless_toggled(self): self.spin_margin.setEnabled(not self.check_borderless.isChecked()); self.trigger_layout_change(preserve_zoom=True)
 
     def apply_global_fit_mode(self):
         mode = self.combo_fit_mode.currentText()
@@ -1050,10 +1106,13 @@ class PhotoPrintApp(QMainWindow):
     def calculate_page_capacity(self):
         paper_w_mm, paper_h_mm, _ = self.combo_paper.currentData()
         if self.check_paper_landscape.isChecked(): paper_w_mm, paper_h_mm = paper_h_mm, paper_w_mm
-        margin_mm = 0 if self.check_borderless.isChecked() else self.spin_margin.value()
+        
+        m_left, m_top, m_right, m_bottom = self.get_margins_mm()
         spacing_mm = self.spin_spacing.value()
         def_w_mm, def_h_mm = self.get_current_layout_dimensions()
-        pw = paper_w_mm - (margin_mm * 2); ph = paper_h_mm - (margin_mm * 2)
+        
+        pw = paper_w_mm - (m_left + m_right)
+        ph = paper_h_mm - (m_top + m_bottom)
         
         cols = 1
         while (cols * def_w_mm) + ((cols - 1) * spacing_mm) <= pw: cols += 1
@@ -1069,9 +1128,12 @@ class PhotoPrintApp(QMainWindow):
     def calculate_dynamic_size(self, w_code):
         paper_w_mm, paper_h_mm, _ = self.combo_paper.currentData()
         if self.check_paper_landscape.isChecked(): paper_w_mm, paper_h_mm = paper_h_mm, paper_w_mm
-        margin = 0 if self.check_borderless.isChecked() else self.spin_margin.value()
+        
+        m_left, m_top, m_right, m_bottom = self.get_margins_mm()
         spacing = self.spin_spacing.value()
-        pw = paper_w_mm - (margin * 2); ph = paper_h_mm - (margin * 2)
+        
+        pw = paper_w_mm - (m_left + m_right)
+        ph = paper_h_mm - (m_top + m_bottom)
         
         if w_code == -1: return pw, ph
         elif w_code == -2: return pw, (ph - spacing) / 2.0
@@ -1345,17 +1407,19 @@ class PhotoPrintApp(QMainWindow):
         
         paper_w_mm, paper_h_mm, _ = self.combo_paper.currentData()
         if self.check_paper_landscape.isChecked(): paper_w_mm, paper_h_mm = paper_h_mm, paper_w_mm
+        
+        m_left, m_top, m_right, m_bottom = self.get_margins_mm()
+        margin_l_px, margin_t_px = int(m_left * self.PPM), int(m_top * self.PPM)
+        margin_r_px, margin_b_px = int(m_right * self.PPM), int(m_bottom * self.PPM)
+        spacing_px = int(self.spin_spacing.value() * self.PPM)
+
         def_w_mm, def_h_mm = self.get_current_layout_dimensions()
 
         px_width = int(paper_w_mm * self.PPM); px_height = int(paper_h_mm * self.PPM)
         self.paper_px_width = px_width; self.paper_px_height = px_height
         
-        is_borderless = self.check_borderless.isChecked()
-        margin_px = 0 if is_borderless else int(self.spin_margin.value() * self.PPM)
-        spacing_px = int(self.spin_spacing.value() * self.PPM)
-        
-        printable_width = px_width - (margin_px * 2)
-        printable_height = px_height - (margin_px * 2)
+        printable_width = px_width - (margin_l_px + margin_r_px)
+        printable_height = px_height - (margin_t_px + margin_b_px)
         
         photo_w_px = min(int(def_w_mm * self.PPM), max(1, printable_width))
         photo_h_px = min(int(def_h_mm * self.PPM), max(1, printable_height))
@@ -1385,8 +1449,8 @@ class PhotoPrintApp(QMainWindow):
         grid_w_px = (cols * photo_w_px) + ((cols - 1) * spacing_px)
         grid_h_px = (max_rows * photo_h_px) + ((max_rows - 1) * spacing_px)
         
-        offset_x = margin_px + (printable_width - grid_w_px) // 2
-        offset_y = margin_px + (printable_height - grid_h_px) // 2
+        offset_x = margin_l_px + (printable_width - grid_w_px) // 2
+        offset_y = margin_t_px + (printable_height - grid_h_px) // 2
 
         pad = CONFIG["CANVAS_PADDING"]
         self.scene.setSceneRect(-pad, -pad, px_width + (pad*2), px_height + (pad*2))
@@ -1399,8 +1463,6 @@ class PhotoPrintApp(QMainWindow):
         self.draw_rulers(px_width, px_height, paper_w_mm, paper_h_mm, int(10 * self.PPM))
 
         dash_pen = QPen(QColor(100, 116, 139) if self.is_dark_mode else QColor(148, 163, 184), 2, Qt.PenStyle.DashLine)
-        
-        start_idx = page_to_draw * capacity
         global_fit_mode = self.combo_fit_mode.currentText(); sharp_mode = self.combo_sharpen.currentText()
         soft_proof_active = self.check_soft_proof.isChecked(); render_intent_text = self.combo_intent.currentText()
         is_monochrome = (self.combo_color.currentData() == QPrinter.ColorMode.GrayScale)
@@ -1412,6 +1474,8 @@ class PhotoPrintApp(QMainWindow):
         doc_color_mode = self.combo_doc_color.currentText() if hasattr(self, 'combo_doc_color') else "Normal (Original)"
         txt_font = self.combo_txt_font.currentText() if hasattr(self, 'combo_txt_font') else "Monospace"
         txt_size = self.spin_txt_size.value() if hasattr(self, 'spin_txt_size') else 10
+        
+        start_idx = page_to_draw * capacity
         
         for local_slot in range(capacity):
             global_idx = start_idx + local_slot
@@ -1441,15 +1505,15 @@ class PhotoPrintApp(QMainWindow):
                 draw_x = cx + (photo_w_px - img_w_px) // 2
                 draw_y = cy + (photo_h_px - img_h_px) // 2
 
-                if draw_x < margin_px: draw_x = margin_px
-                if draw_y < margin_px: draw_y = margin_px
-                if draw_x + img_w_px > margin_px + printable_width: draw_x = margin_px + printable_width - img_w_px
-                if draw_y + img_h_px > margin_px + printable_height: draw_y = margin_px + printable_height - img_h_px
+                if draw_x < margin_l_px: draw_x = margin_l_px
+                if draw_y < margin_t_px: draw_y = margin_t_px
+                if draw_x + img_w_px > margin_l_px + printable_width: draw_x = margin_l_px + printable_width - img_w_px
+                if draw_y + img_h_px > margin_t_px + printable_height: draw_y = margin_t_px + printable_height - img_h_px
 
                 cell = QGraphicsRectItem(draw_x, draw_y, img_w_px, img_h_px)
                 cell.setPen(dash_pen); cell.setBrush(QColor(0, 0, 0, 0)); self.scene.addItem(cell)
                 self.cell_border_items.append(cell)
-                if not is_borderless: self.draw_corner_crop_marks(draw_x, draw_y, img_w_px, img_h_px)
+                if not self.check_borderless.isChecked(): self.draw_corner_crop_marks(draw_x, draw_y, img_w_px, img_h_px)
 
                 path = img_data['path']
                 try: mtime = os.path.getmtime(path)
@@ -1510,7 +1574,7 @@ class PhotoPrintApp(QMainWindow):
                 cell = QGraphicsRectItem(cx, cy, photo_w_px, photo_h_px)
                 cell.setPen(dash_pen); cell.setBrush(QColor(0, 0, 0, 0)); self.scene.addItem(cell)
                 self.cell_border_items.append(cell)
-                if not is_borderless: self.draw_corner_crop_marks(cx, cy, photo_w_px, photo_h_px)
+                if not self.check_borderless.isChecked(): self.draw_corner_crop_marks(cx, cy, photo_w_px, photo_h_px)
             
         if reset_zoom and not self.view.user_zoomed:
             self.view.fitInView(self.scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
