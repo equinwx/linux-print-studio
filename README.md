@@ -18,7 +18,7 @@ This utility was created for personal workflow needs and is shared freely with t
 
 ### 📸 Tab 1: Photos & Tiling Tools
 * **Standard Lab Presets**: Instant sizing for Passport (Standard 35×45mm, US 51×51mm, India 35×35mm), ID cards, Stamp photos, Wallet prints, and custom dimensions (10–500 mm).
-* **In-Cell Fine Framing**: Pan and crop inside any cell with `Shift` + Mouse Drag or nudge using `Shift` + Arrow keys (`Ctrl` for 1% micro-nudging).
+* **In-Cell Fine Framing**: Pan and crop inside any cell with `Shift` + Mouse Drag or nudge using `Shift` + Arrow keys (`Ctrl` for 1% micro-nudging). Zoom in and out inside the cell with `Shift` + Mouse Wheel using `Shift` + MouseWheelUp or MouseWheelDown.
 * **Guillotine Cutting Guides**: Configurable printable dashed cutting borders and corner crop marks for clean manual trimming.
 * **Substrate Sharpening**: Multi-tier unsharp masking calibrated for Matte, Rag, Standard Photo, or Glossy papers.
 * **Color Management**: LittleCMS proofing engine with custom `.icc`/`.icm` profile loading, soft-proofing simulation, and rendering intent selection (Perceptual, Relative Colorimetric, Saturation, Absolute).
